@@ -1,8 +1,9 @@
 # JobKreators Sourcing Console (jbkfinder)
 
-A Next.js dashboard that drives the n8n candidate-sourcing workflows and reads
-the delivered candidates back out of Google Sheets. Three platforms live in
-separate tabs: **Shine**, **Foundit** and **Apna**.
+A Next.js dashboard that drives the n8n candidate-sourcing workflows. The
+webhooks hold the connection open until the run finishes and return the scored
+candidates in the response, so the table fills straight from the run. Three
+platforms live in separate tabs: **Shine**, **Foundit** and **Apna**.
 
 Left panel: platform tabs, JD in (paste or PDF), skills, location priority,
 the filters that platform actually supports, count, client, notify email, sheet
@@ -21,11 +22,15 @@ Shine's results waiting.
 | Platform | Sheet tab | Filters wired | Phone numbers |
 | --- | --- | --- | --- |
 | Shine | `Shine.csv` | experience, package, age, strict location, keyword | direct |
-| Foundit | `Foundit` | experience only | masked, revealing costs credits |
-| Apna | `Apna` | experience, package, strict location, keyword | not in search results, paid unlock |
+| Foundit | `Foundit` | experience, package, age, page, reveal count | top N revealed with credits, rest masked |
+| Apna | `Apna` | experience, package, age, strict location, keyword, page | not in search results, paid unlock |
 
-All three write their run summary to the shared **Run Log** tab. The dashboard
-filters that log on its `Source` column.
+Where pagination is wired, the **Page** field steps up by itself after each run,
+and every Candidate ID already pulled this session goes out as `excludeIds`, so
+a repeat run never returns the same person.
+
+Run history is stored in the browser under `jbkfinder.runHistory`, capped at 100
+entries. It is per-browser, not shared, and **Clear history** wipes it.
 
 Adding a fourth platform is one object literal in `lib/platforms.ts`. The form
 fields, payload keys, webhook lookup, results tab and phone-availability notice
@@ -133,8 +138,8 @@ batch and everything in the sheet.
 
 - **Shine.csv**, **Foundit**, **Apna** contain candidate rows, one tab per
   platform. Key column is `Candidate ID`.
-- **Run Log** holds one row per run across all platforms. Its `Source` column
-  drives the platform filter on the Run history tab.
+There is no longer a **Run Log** tab in play; run history is local to the
+browser.
 
 Rows written before August 2026 have no `Candidate ID`. Clearing those once
 gives a clean cumulative count.
@@ -145,11 +150,13 @@ gives a clean cumulative count.
 - `lib/platforms.ts` is the platform registry, the single source of truth
 - `app/api/source/route.ts` resolves the webhook from the platform and forwards
 - `app/api/results/route.ts` resolves the sheet tab from the platform and reads
-- `app/api/runs/route.ts` reads the shared `Run Log` tab
+  it; this now only backs the polling fallback and loading an existing sheet
 - `app/api/parse-pdf/route.ts` extracts text from an uploaded JD PDF
 - `lib/sheets.ts` is the read-only Google Sheets helper
+- `lib/runHistory.ts` is the localStorage-backed run history
 
-Google Sheets access is read-only via service account. n8n does all writing.
+Google Sheets access is read-only via service account, and optional: without it
+the sheet reads come back empty instead of erroring. n8n does all writing.
 
 ## Local development
 

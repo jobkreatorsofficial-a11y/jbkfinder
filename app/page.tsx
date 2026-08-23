@@ -9,9 +9,15 @@ import {
   type Platform,
   type PlatformId,
 } from "@/lib/platforms";
+import {
+  appendRun,
+  clearRunHistory,
+  newRunId,
+  readRunHistory,
+  type RunEntry,
+} from "@/lib/runHistory";
 
 type Candidate = Record<string, string>;
-type Run = Record<string, string>;
 
 const COUNTS = ["25", "40"];
 const POLL_INTERVAL_MS = 3000;
@@ -29,6 +35,8 @@ interface FormState {
   maxSalary: string;
   minAge: string;
   maxAge: string;
+  page: string;
+  revealCount: string;
   candidateCount: string;
   clientName: string;
   recipientEmail: string;
@@ -71,6 +79,8 @@ function blankForm(platform: Platform): FormState {
     maxSalary: "",
     minAge: "",
     maxAge: "",
+    page: "1",
+    revealCount: "20",
     candidateCount: "25",
     clientName: "",
     recipientEmail: "",
@@ -131,7 +141,7 @@ const COL = {
   salary: ["Current Salary (LPA)", "Current Salary", "Salary (LPA)", "Salary", "CTC"],
   match: ["Match %", "Match", "Score"],
   number: ["Number", "Phone", "Mobile"],
-  contact: ["Contact?", "Contact", "Contactable"],
+  contact: ["Contact Status", "Contact?", "Contact", "Contactable"],
   link: ["Profile Link", "Profile URL", "Profile", "Link"],
   sourcedAt: ["Sourced At", "SourcedAt", "Date"],
   candidateId: ["Candidate ID", "CandidateID", "Id"],
@@ -172,9 +182,48 @@ function targetCluster(loc: string) {
   return best;
 }
 
+// "Contact Status" is the key the workflows send now; older sheet rows carried
+// a plain yes/no column. Both mean the number is in hand.
+const CONTACT_READY = ["yes", "revealed", "unlocked"];
+function contactReady(value: string) {
+  return CONTACT_READY.includes(String(value || "").trim().toLowerCase());
+}
+
+// A run entry for the local history. The response array is already rank
+// ordered, so the first row is the top candidate.
+function buildRunEntry(
+  id: PlatformId,
+  f: FormState,
+  rows: Candidate[],
+  page: number
+): RunEntry {
+  const top = rows[0];
+  return {
+    id: newRunId(),
+    platform: id,
+    timestamp: new Date().toISOString(),
+    jobTitle: f.jobTitle.trim(),
+    clientName: f.clientName.trim(),
+    location: f.location.trim(),
+    candidateCount: rows.length,
+    revealedCount: rows.filter(
+      (c) => String(c["Contact Status"] || "").trim().toLowerCase() === "revealed"
+    ).length,
+    topCandidate: top ? pick(top, COL.name) : "",
+    topScore: top ? Number(pick(top, COL.match) || 0) : 0,
+    page,
+  };
+}
+
 function tsOf(c: Candidate) {
   const t = Date.parse(pick(c, COL.sourcedAt));
   return Number.isNaN(t) ? 0 : t;
+}
+
+// The page field is free text; fall back to the first page on anything odd.
+function pageOf(f: FormState) {
+  const p = parseInt(f.page, 10);
+  return Number.isFinite(p) && p > 0 ? p : 1;
 }
 
 function csrfFromCookie(cookie: string) {
@@ -189,7 +238,7 @@ export default function Page() {
   );
   const [runState, setRunState] = useState<ByPlatform<RunState>>(() => initialBy(blankRunState));
   const [results, setResults] = useState<ByPlatform<Candidate[]>>(() => initialBy(() => []));
-  const [runs, setRuns] = useState<Run[]>([]);
+  const [runs, setRuns] = useState<RunEntry[]>([]);
   const [runFilter, setRunFilter] = useState<"all" | PlatformId>("all");
   const [view, setView] = useState<"results" | "runs">("results");
   const [copiedKey, setCopiedKey] = useState("");
@@ -198,11 +247,22 @@ export default function Page() {
   // One poll timer per platform, so a Shine run keeps polling while the
   // recruiter works on the Apna tab.
   const pollTimers = useRef<Partial<Record<PlatformId, ReturnType<typeof setInterval>>>>({});
+  // Every Candidate ID seen on this platform this session. The results table
+  // only holds the latest run, so excludeIds is built from here instead.
+  const seenIds = useRef<ByPlatform<Set<string>>>(initialBy(() => new Set<string>()));
 
   const platform = PLATFORMS[active];
   const form = forms[active];
   const run = runState[active];
   const candidates = results[active];
+
+  const rememberIds = useCallback((id: PlatformId, rows: Candidate[]) => {
+    const set = seenIds.current[id];
+    for (const c of rows) {
+      const cid = pick(c, COL.candidateId);
+      if (cid) set.add(cid);
+    }
+  }, []);
 
   const patchForm = useCallback((id: PlatformId, patch: Partial<FormState>) => {
     setForms((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
@@ -241,36 +301,24 @@ export default function Page() {
         // Without a service account the sheet always reads as empty; do not let
         // that wipe candidates the webhook already returned.
         if (d.configured !== false) setResults((prev) => ({ ...prev, [id]: rows }));
+        rememberIds(id, rows);
         return rows;
       }
     } catch {
       // A failed poll tick is not fatal; the next tick tries again.
     }
     return [];
-  }, []);
+  }, [rememberIds]);
 
-  const loadRuns = useCallback(async (url: string) => {
-    if (!url.trim()) return;
-    try {
-      const r = await fetch("/api/runs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sheetUrl: url }),
-      });
-      const d = await r.json();
-      if (d.ok) setRuns((d.runs || []) as Run[]);
-    } catch {
-      // ignore, history is not critical
-    }
+  // History is local to the browser, so it is read once on mount.
+  useEffect(() => {
+    setRuns(readRunHistory());
   }, []);
 
   const activeSheetUrl = form.sheetUrl;
   useEffect(() => {
-    if (activeSheetUrl.trim()) {
-      loadResults(active, activeSheetUrl);
-      loadRuns(activeSheetUrl);
-    }
-  }, [active, activeSheetUrl, loadResults, loadRuns]);
+    if (activeSheetUrl.trim()) loadResults(active, activeSheetUrl);
+  }, [active, activeSheetUrl, loadResults]);
 
   useEffect(() => {
     const timers = pollTimers.current;
@@ -305,7 +353,7 @@ export default function Page() {
   // Fallback for workflows that still answer with an acknowledgement instead of
   // the candidate list: poll the sheet until rows stamped after this run show up.
   const startPolling = useCallback(
-    (id: PlatformId, url: string, startedAt: number) => {
+    (id: PlatformId, url: string, startedAt: number, meta: { form: FormState; page: number }) => {
       const existing = pollTimers.current[id];
       if (existing) clearInterval(existing);
       patchRun(id, { loadingResults: true, timedOut: false, pollLeft: MAX_TICKS });
@@ -316,8 +364,8 @@ export default function Page() {
         ticks++;
         patchRun(id, { pollLeft: Math.max(0, MAX_TICKS - ticks) });
         const rows = await loadResults(id, url);
-        await loadRuns(url);
-        const fresh = rows.some((c) => tsOf(c) >= cutoff);
+        const freshRows = rows.filter((c) => tsOf(c) >= cutoff);
+        const fresh = freshRows.length > 0;
         if (fresh || ticks >= MAX_TICKS) {
           clearInterval(timer);
           pollTimers.current[id] = undefined;
@@ -327,11 +375,12 @@ export default function Page() {
             pollLeft: 0,
             timedOut: !fresh,
           });
+          if (fresh) setRuns(appendRun(buildRunEntry(id, meta.form, freshRows, meta.page)));
         }
       }, POLL_INTERVAL_MS);
       pollTimers.current[id] = timer;
     },
-    [loadResults, loadRuns, patchRun]
+    [loadResults, patchRun]
   );
 
   function buildPayload(id: PlatformId): Record<string, string> {
@@ -360,6 +409,19 @@ export default function Page() {
     if (p.supports.ageRange) {
       payload.minAge = f.minAge;
       payload.maxAge = f.maxAge;
+    }
+    if (p.supports.pagination) {
+      payload.page = String(pageOf(f));
+    }
+    if (p.supports.revealCount) {
+      // Blank means "spend nothing" rather than falling back to the default,
+      // since this field costs credits.
+      payload.revealCount = String(Number(f.revealCount) || 0);
+    }
+    if (p.supports.excludeIds) {
+      // Every Candidate ID already on screen for this platform, so a repeat run
+      // walks past them instead of returning the same people.
+      payload.excludeIds = Array.from(seenIds.current[id]).join(",");
     }
     if (p.supports.keywordOverride && p.keywordKey) {
       payload[p.keywordKey] = f.keywordOverride.trim().toLowerCase();
@@ -406,6 +468,7 @@ export default function Page() {
       return;
     }
 
+    const pageUsed = pageOf(f);
     const startedAt = Date.now();
     patchRun(id, {
       running: true,
@@ -434,12 +497,17 @@ export default function Page() {
 
       setView("results");
 
+      // Walk to the next block on the following run, so repeat runs against the
+      // same JD keep pulling fresh people.
+      if (p.supports.pagination) patchForm(id, { page: String(pageUsed + 1) });
+
       // The webhook returns the scored candidates itself, so show them straight
       // away. Only fall back to polling the sheet when it came back empty,
       // which means an older workflow that only writes to the sheet.
       const direct = (Array.isArray(d.candidates) ? d.candidates : []) as Candidate[];
       if (direct.length) {
         setResults((prev) => ({ ...prev, [id]: direct }));
+        rememberIds(id, direct);
         patchRun(id, {
           running: false,
           submitting: false,
@@ -447,13 +515,12 @@ export default function Page() {
           loadingResults: false,
           timedOut: false,
         });
-        // History still lives in the sheet; a failure here is not fatal.
-        loadRuns(f.sheetUrl);
+        setRuns(appendRun(buildRunEntry(id, f, direct, pageUsed)));
         return;
       }
 
       patchRun(id, { submitting: false, justAccepted: true });
-      startPolling(id, f.sheetUrl, startedAt);
+      startPolling(id, f.sheetUrl, startedAt, { form: f, page: pageUsed });
     } catch {
       patchRun(id, {
         formErr: "Could not reach the sourcing service.",
@@ -505,7 +572,7 @@ export default function Page() {
   ).size;
   const directPhone = platform.phoneAvailability === "direct";
   const withPhone = visible.filter((c) => pick(c, COL.number)).length;
-  const unlockable = visible.filter((c) => pick(c, COL.contact).toLowerCase() !== "yes").length;
+  const unlockable = visible.filter((c) => !contactReady(pick(c, COL.contact))).length;
   const localCount = clusterCities.length
     ? visible.filter((c) => {
         const hay = pick(c, COL.location).toLowerCase();
@@ -516,13 +583,7 @@ export default function Page() {
 
   const phoneNotice = PHONE_NOTICE[platform.phoneAvailability];
 
-  const filteredRuns =
-    runFilter === "all"
-      ? runs
-      : runs.filter((r) => {
-          const src = String(r["Source"] || "").toLowerCase();
-          return src.includes(PLATFORMS[runFilter].label.toLowerCase());
-        });
+  const filteredRuns = runFilter === "all" ? runs : runs.filter((r) => r.platform === runFilter);
 
   function renderCredential(c: CredentialField) {
     const value = form.credentials[c.name] ?? "";
@@ -759,7 +820,7 @@ export default function Page() {
           <div className="row2">
             <div className="field">
               <label>
-                Min age <span className="hint">years</span>
+                Min age <span className="hint">years, optional</span>
               </label>
               <input
                 type="number"
@@ -771,7 +832,7 @@ export default function Page() {
             </div>
             <div className="field">
               <label>
-                Max age <span className="hint">years</span>
+                Max age <span className="hint">years, optional</span>
               </label>
               <input
                 type="number"
@@ -781,6 +842,43 @@ export default function Page() {
                 placeholder="Optional"
               />
             </div>
+          </div>
+        )}
+
+        {(platform.supports.pagination || platform.supports.revealCount) && (
+          <div
+            className={
+              platform.supports.pagination && platform.supports.revealCount ? "row2" : undefined
+            }
+          >
+            {platform.supports.pagination && (
+              <div className="field">
+                <label>Page</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={form.page}
+                  onChange={(e) => patchForm(active, { page: e.target.value })}
+                />
+                <div className="field-note">
+                  Steps up on its own after each run, so the next run pulls a fresh block.
+                </div>
+              </div>
+            )}
+            {platform.supports.revealCount && (
+              <div className="field">
+                <label>Reveal count</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={form.revealCount}
+                  onChange={(e) => patchForm(active, { revealCount: e.target.value })}
+                />
+                <div className="field-note">
+                  Credits spent per run. Set to 0 to search without revealing numbers.
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -881,7 +979,7 @@ export default function Page() {
                 ? form.sheetUrl
                   ? `Live from the ${platform.sheetTab} tab, newest first. Duplicate profiles are collapsed by Candidate ID.`
                   : "Add a sheet URL to see results here."
-                : "Every sourcing run logged to this sheet."}
+                : "Sourcing runs from this browser, newest first."}
             </p>
           </div>
           <div className="head-actions">
@@ -892,6 +990,18 @@ export default function Page() {
                 onClick={() => patchRun(active, { latestOnly: !run.latestOnly })}
               >
                 {run.latestOnly ? "This run only" : "All candidates"}
+              </button>
+            )}
+            {view === "runs" && runs.length > 0 && (
+              <button
+                type="button"
+                className="link-btn"
+                onClick={() => {
+                  clearRunHistory();
+                  setRuns([]);
+                }}
+              >
+                Clear history
               </button>
             )}
             <div className="view-toggle">
@@ -1015,7 +1125,7 @@ export default function Page() {
                       const pri = pick(c, COL.priority) || "Low";
                       const link = pick(c, COL.link);
                       const contact = pick(c, COL.contact);
-                      const contactYes = contact.toLowerCase() === "yes";
+                      const contactYes = contactReady(contact);
                       return (
                         <tr key={pick(c, COL.candidateId) || `row-${i}`}>
                           <td>
@@ -1097,38 +1207,36 @@ export default function Page() {
 
             {filteredRuns.length === 0 ? (
               <div className="empty">
-                <div className="big">No runs logged yet</div>
-                <div className="small">
-                  Each time you run sourcing, a row lands in the Run Log tab with counts and the
-                  top candidate. They list here newest first.
-                </div>
+                <div className="big">No runs yet.</div>
+                <div className="small">Run a sourcing job and it will appear here.</div>
               </div>
             ) : (
               <div className="runs">
-                {filteredRuns.map((r, i) => (
-                  <div className="run-card" key={i}>
+                {filteredRuns.map((r) => (
+                  <div className="run-card" key={r.id}>
                     <div>
                       <div className="run-role">
-                        {r["Role"] || "Untitled role"}
-                        {r["Source"] && <span className="run-src">{r["Source"]}</span>}
+                        {r.jobTitle || "Untitled role"}
+                        <span className="run-src">{PLATFORMS[r.platform]?.label || r.platform}</span>
                       </div>
                       <div className="run-sub">
-                        {r["Client"] || "-"} · {r["Date"] ? new Date(r["Date"]).toLocaleString() : ""}
-                        {r["Top Candidate"] ? ` · top: ${r["Top Candidate"]} (${r["Top Score"] || 0}%)` : ""}
+                        {r.clientName || "-"} · {new Date(r.timestamp).toLocaleString()}
+                        {r.location ? ` · ${r.location}` : ""}
+                        {r.topCandidate ? ` · top: ${r.topCandidate} (${r.topScore}%)` : ""}
                       </div>
                     </div>
                     <div className="run-nums">
                       <div className="rn">
-                        <div className="n mono">{r["Candidates Found"] || 0}</div>
+                        <div className="n mono">{r.candidateCount}</div>
                         <div className="l">found</div>
                       </div>
                       <div className="rn sig">
-                        <div className="n mono">{r["With Numbers"] || 0}</div>
-                        <div className="l">phones</div>
+                        <div className="n mono">{r.revealedCount}</div>
+                        <div className="l">revealed</div>
                       </div>
                       <div className="rn">
-                        <div className="n mono">{r["Mumbai"] || 0}</div>
-                        <div className="l">local</div>
+                        <div className="n mono">{r.page}</div>
+                        <div className="l">page</div>
                       </div>
                     </div>
                   </div>

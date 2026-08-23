@@ -5,9 +5,10 @@ import { google } from "googleapis";
 // The service account email must be shared as a Viewer on the sheet.
 //
 // Candidates now come back on the webhook response, so this is only needed for
-// the Run history tab and the polling fallback. When the service account is not
-// configured the readers return no rows instead of throwing, so those views show
-// an empty state rather than a 500.
+// the polling fallback and for loading an existing sheet. When the service
+// account is not configured the reader returns no rows instead of throwing, so
+// the dashboard shows an empty state rather than a 500. Run history no longer
+// touches the sheet at all; it lives in localStorage (lib/runHistory.ts).
 
 function serviceAccount(): { email: string; key: string } | null {
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
@@ -79,12 +80,4 @@ export async function getCandidates(sheetUrl: string, tab: string) {
   if (!isSheetsConfigured()) return [];
   const id = extractSheetId(sheetUrl);
   return readTab(id, tab);
-}
-
-export async function getRuns(sheetUrl: string) {
-  if (!isSheetsConfigured()) return [];
-  const id = extractSheetId(sheetUrl);
-  const runs = await readTab(id, "Run Log");
-  // Newest first.
-  return runs.reverse();
 }

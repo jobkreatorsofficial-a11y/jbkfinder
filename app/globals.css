@@ -252,6 +252,18 @@ a:hover { text-decoration: underline; }
 .view-toggle button.on { background: var(--heading); border-color: var(--heading); color: white; }
 
 .head-actions { display: flex; align-items: center; gap: 10px; }
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--slate-2);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+}
+.link-btn:hover { color: var(--heading); }
 .scope-toggle {
   background: var(--card);
   border: 1px dashed var(--hair);

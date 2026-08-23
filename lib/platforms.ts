@@ -20,7 +20,14 @@ export interface PlatformSupports {
   ageRange: boolean;
   strictLocation: boolean;
   keywordOverride: boolean;
-  pageSize: boolean;
+  // Workflow takes a `page` key, so successive runs can walk deeper into the
+  // result set instead of re-fetching the first block.
+  pagination: boolean;
+  // Workflow takes an `excludeIds` key: the Candidate IDs already pulled this
+  // session, so a repeat run never returns the same person twice.
+  excludeIds: boolean;
+  // Workflow reveals the top N numbers itself, spending credits.
+  revealCount: boolean;
 }
 
 export interface Platform {
@@ -54,7 +61,9 @@ export const PLATFORMS: Record<PlatformId, Platform> = {
       ageRange: true,
       strictLocation: true,
       keywordOverride: true,
-      pageSize: false,
+      pagination: false,
+      excludeIds: false,
+      revealCount: false,
     },
     phoneAvailability: "direct",
     keywordKey: "shineKeywordOverride",
@@ -88,11 +97,13 @@ export const PLATFORMS: Record<PlatformId, Platform> = {
     sheetTab: "Foundit",
     supports: {
       experienceRange: true,
-      salaryRange: false,
-      ageRange: false,
+      salaryRange: true,
+      ageRange: true,
       strictLocation: false,
       keywordOverride: false,
-      pageSize: false,
+      pagination: true,
+      excludeIds: true,
+      revealCount: true,
     },
     phoneAvailability: "masked",
     credentials: [
@@ -105,7 +116,7 @@ export const PLATFORMS: Record<PlatformId, Platform> = {
       },
     ],
     notes:
-      "Phone numbers come back masked; revealing costs credits. Only the experience filter is wired on this platform so far.",
+      "Top candidates get their numbers revealed automatically using credits. Set reveal count to 0 to search for free.",
   },
 
   apna: {
@@ -116,10 +127,12 @@ export const PLATFORMS: Record<PlatformId, Platform> = {
     supports: {
       experienceRange: true,
       salaryRange: true,
-      ageRange: false,
+      ageRange: true,
       strictLocation: true,
       keywordOverride: true,
-      pageSize: false,
+      pagination: true,
+      excludeIds: true,
+      revealCount: false,
     },
     phoneAvailability: "unlock_required",
     keywordKey: "apnaKeyword",
@@ -168,5 +181,6 @@ export const PHONE_NOTICE: Record<Platform["phoneAvailability"], string> = {
   direct: "",
   unlock_required:
     "Apna does not return phone numbers in search results. Profiles are complete otherwise; contact details need a paid unlock.",
-  masked: "Foundit returns masked numbers. Revealing costs credits.",
+  masked:
+    "Foundit reveals the top-ranked numbers automatically, spending credits. The rest stay masked until revealed.",
 };
