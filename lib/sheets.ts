@@ -3,16 +3,31 @@ import { google } from "googleapis";
 // Reads candidate rows and run-log rows back from the same Google Sheet the
 // n8n workflow writes to. Auth uses a service account (env vars set in Vercel).
 // The service account email must be shared as a Viewer on the sheet.
+//
+// Candidates now come back on the webhook response, so this is only needed for
+// the Run history tab and the polling fallback. When the service account is not
+// configured the readers return no rows instead of throwing, so those views show
+// an empty state rather than a 500.
 
-function getAuth() {
+function serviceAccount(): { email: string; key: string } | null {
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
   const key = (process.env.GOOGLE_SERVICE_ACCOUNT_KEY || "").replace(/\\n/g, "\n");
-  if (!email || !key) {
+  if (!email || !key) return null;
+  return { email, key };
+}
+
+export function isSheetsConfigured(): boolean {
+  return serviceAccount() !== null;
+}
+
+function getAuth() {
+  const creds = serviceAccount();
+  if (!creds) {
     throw new Error("Google service account credentials are not configured.");
   }
   return new google.auth.JWT({
-    email,
-    key,
+    email: creds.email,
+    key: creds.key,
     scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
   });
 }
@@ -61,11 +76,13 @@ async function readTab(sheetId: string, tab: string): Promise<Record<string, str
 // The tab name comes from the platform registry, so each platform reads its
 // own results tab out of the same spreadsheet.
 export async function getCandidates(sheetUrl: string, tab: string) {
+  if (!isSheetsConfigured()) return [];
   const id = extractSheetId(sheetUrl);
   return readTab(id, tab);
 }
 
 export async function getRuns(sheetUrl: string) {
+  if (!isSheetsConfigured()) return [];
   const id = extractSheetId(sheetUrl);
   const runs = await readTab(id, "Run Log");
   // Newest first.

@@ -43,6 +43,9 @@ interface FormState {
 interface RunState {
   running: boolean;
   formErr: string;
+  // The webhook now holds the connection open while the workflow runs, so a
+  // request can be in flight for up to 30 seconds before candidates land.
+  submitting: boolean;
   justAccepted: boolean;
   loadingResults: boolean;
   pollLeft: number;
@@ -84,6 +87,7 @@ function blankRunState(): RunState {
   return {
     running: false,
     formErr: "",
+    submitting: false,
     justAccepted: false,
     loadingResults: false,
     pollLeft: 0,
@@ -234,7 +238,9 @@ export default function Page() {
       const d = await r.json();
       if (d.ok) {
         const rows = (d.candidates || []) as Candidate[];
-        setResults((prev) => ({ ...prev, [id]: rows }));
+        // Without a service account the sheet always reads as empty; do not let
+        // that wipe candidates the webhook already returned.
+        if (d.configured !== false) setResults((prev) => ({ ...prev, [id]: rows }));
         return rows;
       }
     } catch {
@@ -296,8 +302,8 @@ export default function Page() {
     }
   }
 
-  // The webhook returns as soon as n8n accepts the run, so poll the sheet until
-  // rows stamped after this run show up.
+  // Fallback for workflows that still answer with an acknowledgement instead of
+  // the candidate list: poll the sheet until rows stamped after this run show up.
   const startPolling = useCallback(
     (id: PlatformId, url: string, startedAt: number) => {
       const existing = pollTimers.current[id];
@@ -403,6 +409,7 @@ export default function Page() {
     const startedAt = Date.now();
     patchRun(id, {
       running: true,
+      submitting: true,
       justAccepted: false,
       timedOut: false,
       runStartedAt: startedAt,
@@ -417,14 +424,42 @@ export default function Page() {
       });
       const d = await r.json();
       if (!d.ok) {
-        patchRun(id, { formErr: d.error || "Could not start sourcing.", running: false });
+        patchRun(id, {
+          formErr: d.error || "Could not start sourcing.",
+          running: false,
+          submitting: false,
+        });
         return;
       }
-      patchRun(id, { justAccepted: true });
+
       setView("results");
+
+      // The webhook returns the scored candidates itself, so show them straight
+      // away. Only fall back to polling the sheet when it came back empty,
+      // which means an older workflow that only writes to the sheet.
+      const direct = (Array.isArray(d.candidates) ? d.candidates : []) as Candidate[];
+      if (direct.length) {
+        setResults((prev) => ({ ...prev, [id]: direct }));
+        patchRun(id, {
+          running: false,
+          submitting: false,
+          justAccepted: true,
+          loadingResults: false,
+          timedOut: false,
+        });
+        // History still lives in the sheet; a failure here is not fatal.
+        loadRuns(f.sheetUrl);
+        return;
+      }
+
+      patchRun(id, { submitting: false, justAccepted: true });
       startPolling(id, f.sheetUrl, startedAt);
     } catch {
-      patchRun(id, { formErr: "Could not reach the sourcing service.", running: false });
+      patchRun(id, {
+        formErr: "Could not reach the sourcing service.",
+        running: false,
+        submitting: false,
+      });
     }
   }
 
@@ -827,6 +862,7 @@ export default function Page() {
         </div>
 
         <button className="run-btn" onClick={runSourcing} disabled={run.running}>
+          {run.running && <span className="spinner sm" />}
           {run.running ? `Sourcing ${platform.label}...` : `Run ${platform.label} sourcing`}
         </button>
 
@@ -869,7 +905,17 @@ export default function Page() {
           </div>
         </div>
 
-        {run.justAccepted && run.loadingResults && (
+        {run.submitting && (
+          <div className="banner">
+            <span className="spinner sm" />
+            <span>
+              Sourcing on {platform.label}. Pulling and scoring now — this usually takes 8 to
+              30 seconds. Results appear below as soon as the run finishes.
+            </span>
+          </div>
+        )}
+
+        {!run.submitting && run.justAccepted && run.loadingResults && (
           <div className="banner">
             <span>●</span>
             <span>
@@ -928,7 +974,7 @@ export default function Page() {
               </div>
             </div>
 
-            {run.loadingResults && total === 0 ? (
+            {(run.submitting || run.loadingResults) && total === 0 ? (
               <div className="loading-block">
                 <div className="spinner" />
                 <div className="working-note">

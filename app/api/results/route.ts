@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCandidates } from "@/lib/sheets";
+import { getCandidates, isSheetsConfigured } from "@/lib/sheets";
 import { getPlatform } from "@/lib/platforms";
 
 export const runtime = "nodejs";
 
 // Reads the candidate rows the workflow wrote to the platform's results tab.
-// The dashboard polls this after a run and shows the live results table.
+// Candidates normally arrive on the webhook response now; this backs the
+// polling fallback and the initial load for a pasted sheet URL.
 // A missing platform param falls back to Shine so older callers keep working.
 
 export async function POST(req: NextRequest) {
@@ -25,7 +26,15 @@ export async function POST(req: NextRequest) {
 
   try {
     const rows = await getCandidates(sheetUrl, platform.sheetTab);
-    return NextResponse.json({ ok: true, platform: platform.id, candidates: rows });
+    // `configured` tells the dashboard whether an empty list means "the tab is
+    // empty" or "we cannot read the sheet at all", so it knows not to clear
+    // candidates that came back on the webhook response.
+    return NextResponse.json({
+      ok: true,
+      platform: platform.id,
+      configured: isSheetsConfigured(),
+      candidates: rows,
+    });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "";
     return NextResponse.json(

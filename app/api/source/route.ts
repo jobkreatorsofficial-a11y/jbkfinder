@@ -5,8 +5,11 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 // Forwards the run request to the n8n workflow webhook for the chosen platform.
-// The workflow sources, scores, and writes results to the Google Sheet. The
-// dashboard then reads results back from the sheet (the webhook returns fast).
+// The webhook holds the connection until the workflow finishes (8-30s) and
+// responds with a JSON array of scored candidates, which we hand straight back
+// to the dashboard. Older workflows answer with an acknowledgement object
+// instead; those come back with an empty candidates array and the dashboard
+// falls back to polling the sheet.
 
 const BASE_REQUIRED = ["jobTitle", "jobDescription", "clientName", "sheetUrl", "recipientEmail"];
 
@@ -78,7 +81,6 @@ export async function POST(req: NextRequest) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    // The workflow runs asynchronously; we only need to know n8n accepted it.
     const text = await res.text().catch(() => "");
     if (!res.ok) {
       return NextResponse.json(
@@ -89,7 +91,25 @@ export async function POST(req: NextRequest) {
         { status: 502 }
       );
     }
-    return NextResponse.json({ ok: true, accepted: true, platform: platform.id });
+
+    // A JSON array is the scored candidate list. Anything else (an
+    // acknowledgement object, an empty body, plain text) means this workflow
+    // still writes to the sheet only, so hand back no candidates and let the
+    // dashboard poll.
+    let candidates: unknown[] = [];
+    try {
+      const parsed = text.trim() ? JSON.parse(text) : null;
+      if (Array.isArray(parsed)) candidates = parsed;
+    } catch {
+      // Not JSON; treat as an acknowledgement.
+    }
+
+    return NextResponse.json({
+      ok: true,
+      accepted: true,
+      platform: platform.id,
+      candidates,
+    });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "";
     return NextResponse.json(

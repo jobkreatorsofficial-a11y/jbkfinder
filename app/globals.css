@@ -385,6 +385,22 @@ table.cand tbody tr:hover { background: #FAFBFF; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Inline variant, for the run button and the in-flight banner. */
+.spinner.sm {
+  display: inline-block;
+  width: 13px; height: 13px;
+  margin: 0;
+  border-width: 2px;
+  flex: none;
+  vertical-align: -2px;
+}
+.banner .spinner.sm { border-color: #Bce6d1; border-top-color: #1C7A4E; }
+.run-btn .spinner.sm {
+  border-color: rgba(255, 255, 255, .35);
+  border-top-color: #fff;
+  margin-right: 8px;
+}
+
 .working-note { font-size: 13px; color: var(--slate); }
 .working-note b { color: var(--heading); }
 
