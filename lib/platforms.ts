@@ -127,9 +127,9 @@ export const PLATFORMS: Record<PlatformId, Platform> = {
       {
         name: "apnaAuth",
         label: "Apna Auth Token",
-        placeholder: "Bearer eyJ...",
+        placeholder: "Token eyJ...",
         helpText:
-          "DevTools > Network > any white-collar-search request > Request Headers > authorization. Starts with Bearer eyJ...",
+          "DevTools > Network > any white-collar-search request > Request Headers > authorization. Starts with Token eyJ...",
         type: "textarea",
         required: true,
       },

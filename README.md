@@ -103,7 +103,7 @@ The CSRF field fills itself.
 **Foundit.** Paste the full cookie string from a logged-in recruiter session.
 
 **Apna.** DevTools, Network, click any `white-collar-search` request, Request
-Headers, copy the `authorization` value. It starts with `Bearer eyJ`. Org ID and
+Headers, copy the `authorization` value. It starts with `Token eyJ`. Org ID and
 Workspace ID are prefilled with the current account's values.
 
 If a run polls out with no new rows, the console says so and suggests the
