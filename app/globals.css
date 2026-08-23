@@ -331,7 +331,8 @@ table.cand tbody tr:hover { background: #FAFBFF; }
 .match-bar-wrap { display: flex; align-items: center; gap: 8px; }
 .match-num { font-weight: 750; color: var(--heading); font-size: 13px; min-width: 34px; }
 .match-bar { flex: 1; height: 6px; background: var(--hair); border-radius: 4px; overflow: hidden; min-width: 46px; }
-.match-fill { height: 100%; border-radius: 4px; }
+/* display:block matters: the fill is a span, and width does not apply to inline boxes. */
+.match-fill { display: block; height: 100%; border-radius: 4px; }
 
 .copy-btn {
   background: var(--canvas);
@@ -407,4 +408,166 @@ table.cand tbody tr:hover { background: #FAFBFF; }
 @media (prefers-reduced-motion: reduce) {
   .spinner { animation: none; }
   .run-btn:hover { transform: none; }
+}
+
+/* ---------- Platform tabs ---------- */
+.platform-tabs {
+  display: flex;
+  gap: 6px;
+  margin-top: 18px;
+  padding: 4px;
+  background: rgba(10, 15, 30, .55);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+.platform-tab {
+  flex: 1;
+  position: relative;
+  background: transparent;
+  border: none;
+  color: var(--mist);
+  border-radius: var(--r-sm);
+  padding: 8px 6px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: .2px;
+  transition: background .15s, color .15s;
+}
+.platform-tab:hover { color: var(--cloud); }
+.platform-tab.on {
+  background: linear-gradient(180deg, var(--indigo-hi), var(--indigo));
+  color: white;
+  box-shadow: 0 6px 14px -8px rgba(79, 91, 213, .9);
+}
+.tab-dot {
+  display: inline-block;
+  width: 6px; height: 6px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--amber);
+  vertical-align: middle;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+
+.platform-note {
+  margin-top: 9px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--slate-2);
+}
+
+/* ---------- Strict location checkbox ---------- */
+.check-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 15px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: rgba(29, 38, 71, .35);
+  cursor: pointer;
+}
+.check-field input[type="checkbox"] {
+  margin: 2px 0 0;
+  width: 15px; height: 15px;
+  accent-color: var(--indigo-hi);
+  flex: none;
+  cursor: pointer;
+}
+.check-field b { display: block; font-size: 12.5px; color: var(--white); font-weight: 700; }
+.check-field em {
+  display: block;
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--slate-2);
+  line-height: 1.45;
+  margin-top: 2px;
+}
+
+/* Credential textareas stay compact so the panel does not balloon. */
+.control textarea.cred-area { min-height: 62px; font-size: 12px; }
+
+/* ---------- Results canvas additions ---------- */
+.notice {
+  margin-bottom: 16px;
+  background: #FFF6E9;
+  border: 1px solid #F2DCBB;
+  color: #8A5A16;
+  border-radius: var(--r-md);
+  padding: 11px 15px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.banner.warn {
+  background: #FFF6E9;
+  border-color: #F2DCBB;
+  color: #8A5A16;
+  align-items: flex-start;
+  line-height: 1.5;
+}
+
+.table-wrap { overflow-x: auto; }
+/* Eleven columns is a lot. Tighten the gutters so Match, Number and Contact
+   still land on screen at a normal laptop width; wider than that scrolls. */
+table.cand { min-width: 900px; }
+table.cand thead th { padding: 11px 10px; }
+table.cand tbody td { padding: 11px 10px; vertical-align: middle; }
+table.cand thead th:first-child, table.cand tbody td:first-child { padding-left: 16px; }
+table.cand thead th:last-child, table.cand tbody td:last-child { padding-right: 16px; }
+/* Let the unit-carrying headers wrap onto two lines rather than forcing the
+   whole table wider than the canvas. */
+table.cand thead th { white-space: normal; line-height: 1.3; }
+table.cand .match-bar { min-width: 40px; }
+table.cand .match-num { min-width: 30px; }
+.cell-soft { color: var(--slate-2); font-size: 12.5px; }
+.cell-num { color: var(--slate); white-space: nowrap; }
+.muted-dash { color: var(--gray-pill); }
+
+/* Stack the copy control under the number so this column does not dominate. */
+.phone-wrap { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.phone-wrap .copy-btn { padding: 2px 8px; font-size: 10.5px; }
+
+.contact-pill {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.contact-pill.yes { background: #E4F5EC; color: #1C7A4E; }
+.contact-pill.no { background: var(--canvas); color: var(--slate-2); border: 1px solid var(--hair); }
+
+/* run history platform filter */
+.run-filter { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+.run-filter button {
+  background: var(--card);
+  border: 1px solid var(--hair);
+  color: var(--slate);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.run-filter button.on { background: var(--heading); border-color: var(--heading); color: white; }
+
+.run-src {
+  margin-left: 8px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  color: var(--slate-2);
+  background: var(--canvas);
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+  padding: 2px 8px;
+  vertical-align: middle;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-dot { animation: none; }
 }

@@ -1,46 +1,79 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getPlatform, isPlatformId } from "@/lib/platforms";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-// Forwards the run request to the n8n Shine workflow webhook. The workflow
-// sources from Shine, scores, and writes results to the Google Sheet. The
+// Forwards the run request to the n8n workflow webhook for the chosen platform.
+// The workflow sources, scores, and writes results to the Google Sheet. The
 // dashboard then reads results back from the sheet (the webhook returns fast).
 
-const WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || "";
+const BASE_REQUIRED = ["jobTitle", "jobDescription", "clientName", "sheetUrl", "recipientEmail"];
+
+function resolveWebhook(envName: string, fallbacks: string[] = []): string {
+  const names = [envName, ...fallbacks];
+  for (const n of names) {
+    const v = String(process.env[n] || "").trim();
+    if (v) return v;
+  }
+  return "";
+}
 
 export async function POST(req: NextRequest) {
-  if (!WEBHOOK_URL) {
-    return NextResponse.json(
-      { ok: false, error: "Sourcing endpoint is not configured. Set N8N_WEBHOOK_URL." },
-      { status: 500 }
-    );
-  }
-
-  let payload: any;
+  let body: Record<string, unknown>;
   try {
-    payload = await req.json();
+    body = await req.json();
   } catch {
     return NextResponse.json({ ok: false, error: "Invalid request body." }, { status: 400 });
   }
 
-  const required = ["jobTitle", "jobDescription", "clientName", "sheetUrl", "recipientEmail", "shineCookie", "shineCsrf"];
-  const missing = required.filter((k) => !String(payload?.[k] || "").trim());
-  if (missing.length) {
+  const platformId = body?.platform;
+  if (!isPlatformId(platformId)) {
     return NextResponse.json(
-      { ok: false, error: `Fill in these fields first: ${missing.join(", ")}.` },
+      { ok: false, error: "Unknown platform. Pick Shine, Foundit or Apna." },
+      { status: 400 }
+    );
+  }
+  const platform = getPlatform(platformId);
+
+  const webhookUrl = resolveWebhook(platform.webhookEnv, platform.webhookEnvFallbacks);
+  if (!webhookUrl) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: `The ${platform.label} sourcing endpoint is not configured. Set ${platform.webhookEnv}.`,
+      },
+      { status: 500 }
+    );
+  }
+
+  // Strip the routing field; n8n only wants the run payload.
+  const payload: Record<string, unknown> = { ...body };
+  delete payload.platform;
+
+  const requiredCreds = platform.credentials.filter((c) => c.required).map((c) => c.name);
+  const missing = [...BASE_REQUIRED, ...requiredCreds].filter(
+    (k) => !String(payload?.[k] ?? "").trim()
+  );
+  if (missing.length) {
+    const labels = missing.map((k) => {
+      const cred = platform.credentials.find((c) => c.name === k);
+      return cred ? cred.label : k;
+    });
+    return NextResponse.json(
+      { ok: false, error: `Fill in these fields first: ${labels.join(", ")}.` },
       { status: 400 }
     );
   }
 
-  // Derive the csrf token from the cookie if the caller left it blank.
-  if (!String(payload.shineCsrf || "").trim()) {
-    const m = String(payload.shineCookie || "").match(/csrftoken=([^;\s]+)/);
+  // Shine only: derive the csrf token from the cookie if the caller left it blank.
+  if (platform.id === "shine" && !String(payload.shineCsrf ?? "").trim()) {
+    const m = String(payload.shineCookie ?? "").match(/csrftoken=([^;\s]+)/);
     if (m) payload.shineCsrf = m[1];
   }
 
   try {
-    const res = await fetch(WEBHOOK_URL, {
+    const res = await fetch(webhookUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -49,14 +82,18 @@ export async function POST(req: NextRequest) {
     const text = await res.text().catch(() => "");
     if (!res.ok) {
       return NextResponse.json(
-        { ok: false, error: `Sourcing service returned ${res.status}. ${text.slice(0, 200)}` },
+        {
+          ok: false,
+          error: `The ${platform.label} sourcing service returned ${res.status}. ${text.slice(0, 200)}`,
+        },
         { status: 502 }
       );
     }
-    return NextResponse.json({ ok: true, accepted: true });
-  } catch (e: any) {
+    return NextResponse.json({ ok: true, accepted: true, platform: platform.id });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "";
     return NextResponse.json(
-      { ok: false, error: `Could not reach the sourcing service. ${e?.message || ""}` },
+      { ok: false, error: `Could not reach the ${platform.label} sourcing service. ${msg}` },
       { status: 502 }
     );
   }

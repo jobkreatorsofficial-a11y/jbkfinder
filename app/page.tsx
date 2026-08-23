@@ -1,11 +1,105 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  PHONE_NOTICE,
+  PLATFORMS,
+  PLATFORM_IDS,
+  type CredentialField,
+  type Platform,
+  type PlatformId,
+} from "@/lib/platforms";
 
 type Candidate = Record<string, string>;
 type Run = Record<string, string>;
 
 const COUNTS = ["25", "40"];
+const POLL_INTERVAL_MS = 3000;
+const MAX_TICKS = 45; // roughly 135 seconds
+
+interface FormState {
+  jobTitle: string;
+  jobDescription: string;
+  requiredSkills: string;
+  location: string;
+  strictLocation: boolean;
+  minExperience: string;
+  maxExperience: string;
+  minSalary: string;
+  maxSalary: string;
+  minAge: string;
+  maxAge: string;
+  candidateCount: string;
+  clientName: string;
+  recipientEmail: string;
+  sheetUrl: string;
+  keywordOverride: string;
+  credentials: Record<string, string>;
+  jdMode: "paste" | "upload";
+  pdfName: string;
+  pdfBusy: boolean;
+}
+
+interface RunState {
+  running: boolean;
+  formErr: string;
+  justAccepted: boolean;
+  loadingResults: boolean;
+  pollLeft: number;
+  runStartedAt: number;
+  latestOnly: boolean;
+  timedOut: boolean;
+}
+
+type ByPlatform<T> = Record<PlatformId, T>;
+
+function blankForm(platform: Platform): FormState {
+  const credentials: Record<string, string> = {};
+  for (const c of platform.credentials) credentials[c.name] = c.defaultValue || "";
+  return {
+    jobTitle: "",
+    jobDescription: "",
+    requiredSkills: "",
+    location: "",
+    strictLocation: true,
+    minExperience: "",
+    maxExperience: "",
+    minSalary: "",
+    maxSalary: "",
+    minAge: "",
+    maxAge: "",
+    candidateCount: "25",
+    clientName: "",
+    recipientEmail: "",
+    sheetUrl: "",
+    keywordOverride: "",
+    credentials,
+    jdMode: "paste",
+    pdfName: "",
+    pdfBusy: false,
+  };
+}
+
+function blankRunState(): RunState {
+  return {
+    running: false,
+    formErr: "",
+    justAccepted: false,
+    loadingResults: false,
+    pollLeft: 0,
+    runStartedAt: 0,
+    latestOnly: false,
+    timedOut: false,
+  };
+}
+
+function initialBy<T>(make: (id: PlatformId) => T): ByPlatform<T> {
+  return {
+    shine: make("shine"),
+    foundit: make("foundit"),
+    apna: make("apna"),
+  };
+}
 
 function matchColor(pct: number) {
   if (pct >= 70) return "#2E9E6B";
@@ -13,58 +107,140 @@ function matchColor(pct: number) {
   return "#9AA3C0";
 }
 
+// Column names drift a little between the three workflow sheets, so read the
+// first header that actually carries a value.
+function pick(row: Candidate, keys: string[]): string {
+  for (const k of keys) {
+    const v = row[k];
+    if (v != null && String(v).trim()) return String(v).trim();
+  }
+  return "";
+}
+
+const COL = {
+  priority: ["Priority"],
+  name: ["Name", "Candidate Name", "Full Name"],
+  title: ["Title", "Designation", "Current Title", "Current Designation"],
+  company: ["Company", "Current Company", "Employer"],
+  location: ["Location", "City", "Current Location"],
+  experience: ["Experience (yrs)", "Experience", "Total Experience", "Experience Years"],
+  salary: ["Current Salary (LPA)", "Current Salary", "Salary (LPA)", "Salary", "CTC"],
+  match: ["Match %", "Match", "Score"],
+  number: ["Number", "Phone", "Mobile"],
+  contact: ["Contact?", "Contact", "Contactable"],
+  link: ["Profile Link", "Profile URL", "Profile", "Link"],
+  sourcedAt: ["Sourced At", "SourcedAt", "Date"],
+  candidateId: ["Candidate ID", "CandidateID", "Id"],
+};
+
+const CLUSTERS: Record<string, string[]> = {
+  "Delhi NCR": [
+    "greater noida",
+    "noida",
+    "new delhi",
+    "delhi",
+    "gurugram",
+    "gurgaon",
+    "ghaziabad",
+    "faridabad",
+  ],
+  "Mumbai MMR": ["navi mumbai", "mumbai", "thane", "andheri"],
+  Bengaluru: ["bengaluru", "bangalore"],
+  Pune: ["pune"],
+  Hyderabad: ["hyderabad", "secunderabad"],
+  Chennai: ["chennai"],
+  Kolkata: ["kolkata"],
+  Ahmedabad: ["ahmedabad"],
+};
+
+function targetCluster(loc: string) {
+  const hay = String(loc || "").toLowerCase();
+  let best = "";
+  let bestLen = 0;
+  for (const name of Object.keys(CLUSTERS)) {
+    for (const city of CLUSTERS[name]) {
+      if (hay.includes(city) && city.length > bestLen) {
+        best = name;
+        bestLen = city.length;
+      }
+    }
+  }
+  return best;
+}
+
+function tsOf(c: Candidate) {
+  const t = Date.parse(pick(c, COL.sourcedAt));
+  return Number.isNaN(t) ? 0 : t;
+}
+
+function csrfFromCookie(cookie: string) {
+  const m = String(cookie || "").match(/csrftoken=([^;\s]+)/);
+  return m ? m[1] : "";
+}
+
 export default function Page() {
-  // form state
-  const [jobTitle, setJobTitle] = useState("");
-  const [jobDescription, setJobDescription] = useState("");
-  const [requiredSkills, setRequiredSkills] = useState("");
-  const [location, setLocation] = useState("");
-  const [minExperience, setMinExperience] = useState("");
-  const [candidateCount, setCandidateCount] = useState("25");
-  const [clientName, setClientName] = useState("");
-  const [sheetUrl, setSheetUrl] = useState("");
-  const [recipientEmail, setRecipientEmail] = useState("");
-  const [shineCookie, setShineCookie] = useState("");
-  const [shineCsrf, setShineCsrf] = useState("");
-  const [keywordOverride, setKeywordOverride] = useState("");
-
-  const [jdMode, setJdMode] = useState<"paste" | "upload">("paste");
-  const [pdfName, setPdfName] = useState("");
-  const [pdfBusy, setPdfBusy] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  // run state
-  const [running, setRunning] = useState(false);
-  const [formErr, setFormErr] = useState("");
-  const [justAccepted, setJustAccepted] = useState(false);
-
-  // results state
-  const [view, setView] = useState<"results" | "runs">("results");
-  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [active, setActive] = useState<PlatformId>("shine");
+  const [forms, setForms] = useState<ByPlatform<FormState>>(() =>
+    initialBy((id) => blankForm(PLATFORMS[id]))
+  );
+  const [runState, setRunState] = useState<ByPlatform<RunState>>(() => initialBy(blankRunState));
+  const [results, setResults] = useState<ByPlatform<Candidate[]>>(() => initialBy(() => []));
   const [runs, setRuns] = useState<Run[]>([]);
-  const [loadingResults, setLoadingResults] = useState(false);
-  const [pollLeft, setPollLeft] = useState(0);
+  const [runFilter, setRunFilter] = useState<"all" | PlatformId>("all");
+  const [view, setView] = useState<"results" | "runs">("results");
   const [copiedKey, setCopiedKey] = useState("");
-  const [runStartedAt, setRunStartedAt] = useState<number>(0);
-  const [latestOnly, setLatestOnly] = useState(false);
 
-  const pollTimer = useRef<any>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  // One poll timer per platform, so a Shine run keeps polling while the
+  // recruiter works on the Apna tab.
+  const pollTimers = useRef<Partial<Record<PlatformId, ReturnType<typeof setInterval>>>>({});
 
-  const loadResults = useCallback(async (url: string) => {
-    if (!url.trim()) return;
+  const platform = PLATFORMS[active];
+  const form = forms[active];
+  const run = runState[active];
+  const candidates = results[active];
+
+  const patchForm = useCallback((id: PlatformId, patch: Partial<FormState>) => {
+    setForms((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+  }, []);
+
+  const patchRun = useCallback((id: PlatformId, patch: Partial<RunState>) => {
+    setRunState((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+  }, []);
+
+  const setCredential = useCallback(
+    (id: PlatformId, name: string, value: string) => {
+      setForms((prev) => {
+        const next = { ...prev[id].credentials, [name]: value };
+        // Shine only: the CSRF field fills itself out of the pasted cookie.
+        if (id === "shine" && name === "shineCookie" && !String(next.shineCsrf || "").trim()) {
+          const derived = csrfFromCookie(value);
+          if (derived) next.shineCsrf = derived;
+        }
+        return { ...prev, [id]: { ...prev[id], credentials: next } };
+      });
+    },
+    []
+  );
+
+  const loadResults = useCallback(async (id: PlatformId, url: string): Promise<Candidate[]> => {
+    if (!url.trim()) return [];
     try {
-      const r = await fetch("/api/results", {
+      const r = await fetch(`/api/results?platform=${encodeURIComponent(id)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sheetUrl: url }),
+        body: JSON.stringify({ sheetUrl: url, platform: id }),
       });
       const d = await r.json();
       if (d.ok) {
-        setCandidates(d.candidates || []);
-        return (d.candidates || []) as Candidate[];
+        const rows = (d.candidates || []) as Candidate[];
+        setResults((prev) => ({ ...prev, [id]: rows }));
+        return rows;
       }
-    } catch {}
-    return [] as Candidate[];
+    } catch {
+      // A failed poll tick is not fatal; the next tick tries again.
+    }
+    return [];
   }, []);
 
   const loadRuns = useCallback(async (url: string) => {
@@ -76,75 +252,163 @@ export default function Page() {
         body: JSON.stringify({ sheetUrl: url }),
       });
       const d = await r.json();
-      if (d.ok) setRuns(d.runs || []);
-    } catch {}
+      if (d.ok) setRuns((d.runs || []) as Run[]);
+    } catch {
+      // ignore, history is not critical
+    }
   }, []);
 
-  // Load history whenever a sheet URL is present (on mount / when it changes).
+  const activeSheetUrl = form.sheetUrl;
   useEffect(() => {
-    if (sheetUrl.trim()) {
-      loadResults(sheetUrl);
-      loadRuns(sheetUrl);
+    if (activeSheetUrl.trim()) {
+      loadResults(active, activeSheetUrl);
+      loadRuns(activeSheetUrl);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sheetUrl]);
+  }, [active, activeSheetUrl, loadResults, loadRuns]);
 
-  useEffect(() => () => clearInterval(pollTimer.current), []);
+  useEffect(() => {
+    const timers = pollTimers.current;
+    return () => {
+      for (const id of PLATFORM_IDS) {
+        const t = timers[id];
+        if (t) clearInterval(t);
+      }
+    };
+  }, []);
 
-  async function onPdf(file: File) {
-    setPdfBusy(true);
-    setFormErr("");
+  async function onPdf(id: PlatformId, file: File) {
+    patchForm(id, { pdfBusy: true });
+    patchRun(id, { formErr: "" });
     try {
       const fd = new FormData();
       fd.append("file", file);
       const r = await fetch("/api/parse-pdf", { method: "POST", body: fd });
       const d = await r.json();
       if (d.ok) {
-        setJobDescription(d.text);
-        setPdfName(file.name);
+        patchForm(id, { jobDescription: d.text, pdfName: file.name });
       } else {
-        setFormErr(d.error || "Could not read that PDF.");
+        patchRun(id, { formErr: d.error || "Could not read that PDF." });
       }
     } catch {
-      setFormErr("Could not read that PDF.");
+      patchRun(id, { formErr: "Could not read that PDF." });
     } finally {
-      setPdfBusy(false);
+      patchForm(id, { pdfBusy: false });
     }
   }
 
-  function csrfFromCookie(cookie: string) {
-    const m = cookie.match(/csrftoken=([^;\s]+)/);
-    return m ? m[1] : "";
+  // The webhook returns as soon as n8n accepts the run, so poll the sheet until
+  // rows stamped after this run show up.
+  const startPolling = useCallback(
+    (id: PlatformId, url: string, startedAt: number) => {
+      const existing = pollTimers.current[id];
+      if (existing) clearInterval(existing);
+      patchRun(id, { loadingResults: true, timedOut: false, pollLeft: MAX_TICKS });
+
+      let ticks = 0;
+      const cutoff = startedAt - 60000; // small grace window for clock skew
+      const timer = setInterval(async () => {
+        ticks++;
+        patchRun(id, { pollLeft: Math.max(0, MAX_TICKS - ticks) });
+        const rows = await loadResults(id, url);
+        await loadRuns(url);
+        const fresh = rows.some((c) => tsOf(c) >= cutoff);
+        if (fresh || ticks >= MAX_TICKS) {
+          clearInterval(timer);
+          pollTimers.current[id] = undefined;
+          patchRun(id, {
+            loadingResults: false,
+            running: false,
+            pollLeft: 0,
+            timedOut: !fresh,
+          });
+        }
+      }, POLL_INTERVAL_MS);
+      pollTimers.current[id] = timer;
+    },
+    [loadResults, loadRuns, patchRun]
+  );
+
+  function buildPayload(id: PlatformId): Record<string, string> {
+    const p = PLATFORMS[id];
+    const f = forms[id];
+    const payload: Record<string, string> = {
+      platform: p.id,
+      jobTitle: f.jobTitle,
+      jobDescription: f.jobDescription,
+      requiredSkills: f.requiredSkills,
+      location: f.location,
+      candidateCount: f.candidateCount,
+      clientName: f.clientName,
+      sheetUrl: f.sheetUrl,
+      recipientEmail: f.recipientEmail,
+    };
+    if (p.supports.strictLocation) payload.strictLocation = f.strictLocation ? "true" : "false";
+    if (p.supports.experienceRange) {
+      payload.minExperience = f.minExperience;
+      payload.maxExperience = f.maxExperience;
+    }
+    if (p.supports.salaryRange) {
+      payload.minSalary = f.minSalary;
+      payload.maxSalary = f.maxSalary;
+    }
+    if (p.supports.ageRange) {
+      payload.minAge = f.minAge;
+      payload.maxAge = f.maxAge;
+    }
+    if (p.supports.keywordOverride && p.keywordKey) {
+      payload[p.keywordKey] = f.keywordOverride.trim().toLowerCase();
+    }
+    for (const c of p.credentials) {
+      let value = f.credentials[c.name] || "";
+      if (id === "shine" && c.name === "shineCsrf" && !value.trim()) {
+        value = csrfFromCookie(f.credentials.shineCookie || "");
+      }
+      payload[c.name] = value.trim();
+    }
+    return payload;
   }
 
   async function runSourcing() {
-    setFormErr("");
-    const csrf = shineCsrf.trim() || csrfFromCookie(shineCookie);
-    const payload = {
-      jobTitle, jobDescription, requiredSkills, location, minExperience,
-      candidateCount, clientName, sheetUrl, recipientEmail,
-      shineCookie, shineCsrf: csrf,
-      shineKeywordOverride: keywordOverride.trim().toLowerCase(),
-    };
+    const id = active;
+    const p = PLATFORMS[id];
+    const f = forms[id];
+    patchRun(id, { formErr: "" });
+
     const required: [string, string][] = [
-      ["Job title", jobTitle], ["Job description", jobDescription],
-      ["Client name", clientName], ["Sheet URL", sheetUrl],
-      ["Notify email", recipientEmail], ["Shine cookie", shineCookie],
+      ["Job title", f.jobTitle],
+      ["Job description", f.jobDescription],
+      ["Client name", f.clientName],
+      ["Sheet URL", f.sheetUrl],
+      ["Notify email", f.recipientEmail],
+      ...p.credentials
+        .filter((c) => c.required)
+        .map((c) => [c.label, f.credentials[c.name] || ""] as [string, string]),
     ];
     const missing = required.filter(([, v]) => !String(v).trim()).map(([k]) => k);
     if (missing.length) {
-      setFormErr(`Fill in: ${missing.join(", ")}.`);
-      return;
-    }
-    if (!csrf) {
-      setFormErr("Could not find the csrf token. Paste the CSRF value, or include csrftoken=... in the cookie.");
+      patchRun(id, { formErr: `Fill in: ${missing.join(", ")}.` });
       return;
     }
 
-    setRunning(true);
-    setJustAccepted(false);
-    setRunStartedAt(Date.now());
-    setLatestOnly(true);
+    const payload = buildPayload(id);
+
+    if (id === "shine" && !payload.shineCsrf) {
+      patchRun(id, {
+        formErr:
+          "Could not find the csrf token. Paste the CSRF value, or include csrftoken=... in the cookie.",
+      });
+      return;
+    }
+
+    const startedAt = Date.now();
+    patchRun(id, {
+      running: true,
+      justAccepted: false,
+      timedOut: false,
+      runStartedAt: startedAt,
+      latestOnly: true,
+    });
+
     try {
       const r = await fetch("/api/source", {
         method: "POST",
@@ -153,44 +417,15 @@ export default function Page() {
       });
       const d = await r.json();
       if (!d.ok) {
-        setFormErr(d.error || "Could not start sourcing.");
-        setRunning(false);
+        patchRun(id, { formErr: d.error || "Could not start sourcing.", running: false });
         return;
       }
-      setJustAccepted(true);
+      patchRun(id, { justAccepted: true });
       setView("results");
-      startPolling(Date.now());
-    } catch (e: any) {
-      setFormErr("Could not reach the sourcing service.");
-      setRunning(false);
+      startPolling(id, f.sheetUrl, startedAt);
+    } catch {
+      patchRun(id, { formErr: "Could not reach the sourcing service.", running: false });
     }
-  }
-
-  // The webhook returns as soon as n8n accepts the run, so poll the sheet until
-  // rows stamped after this run show up. A Shine run takes roughly 30 to 120
-  // seconds end to end, so the window is generous.
-  function startPolling(startedAt: number) {
-    clearInterval(pollTimer.current);
-    setLoadingResults(true);
-    let ticks = 0;
-    const maxTicks = 45; // ~135s at 3s
-    setPollLeft(maxTicks);
-    const cutoff = startedAt - 60000;
-    pollTimer.current = setInterval(async () => {
-      ticks++;
-      setPollLeft(maxTicks - ticks);
-      const rows = await loadResults(sheetUrl);
-      await loadRuns(sheetUrl);
-      const fresh = (rows || []).some((c) => {
-        const t = Date.parse(String(c["Sourced At"] || ""));
-        return !Number.isNaN(t) && t >= cutoff;
-      });
-      if (fresh || ticks >= maxTicks) {
-        clearInterval(pollTimer.current);
-        setLoadingResults(false);
-        setRunning(false);
-      }
-    }, 3000);
   }
 
   function copyText(txt: string, key: string) {
@@ -204,72 +439,78 @@ export default function Page() {
   // The sheet is cumulative and upserts on Candidate ID, so the same profile can
   // appear once per run keyword. Collapse to one row per candidate (newest wins)
   // and show the freshest sourcing first.
-  const CLUSTERS: Record<string, string[]> = {
-    "Delhi NCR": ["greater noida", "noida", "new delhi", "delhi", "gurugram", "gurgaon", "ghaziabad", "faridabad"],
-    "Mumbai MMR": ["navi mumbai", "mumbai", "thane", "andheri"],
-    Bengaluru: ["bengaluru", "bangalore"],
-    Pune: ["pune"],
-    Hyderabad: ["hyderabad", "secunderabad"],
-    Chennai: ["chennai"],
-    Kolkata: ["kolkata"],
-    Ahmedabad: ["ahmedabad"],
-  };
-
-  function targetCluster(loc: string) {
-    const hay = String(loc || "").toLowerCase();
-    let best = "";
-    let bestLen = 0;
-    for (const name of Object.keys(CLUSTERS)) {
-      for (const city of CLUSTERS[name]) {
-        if (hay.includes(city) && city.length > bestLen) { best = name; bestLen = city.length; }
-      }
-    }
-    return best;
-  }
-
-  function tsOf(c: Candidate) {
-    const t = Date.parse(String(c["Sourced At"] || ""));
-    return Number.isNaN(t) ? 0 : t;
-  }
-
-  const cluster = targetCluster(location);
+  const cluster = targetCluster(form.location);
   const clusterCities = cluster ? CLUSTERS[cluster] : [];
 
   const visible = (() => {
     const byId = new Map<string, Candidate>();
     for (const c of candidates) {
-      const id = String(c["Candidate ID"] || "").trim() ||
-        `${String(c["Name"] || "").toLowerCase()}|${String(c["Number"] || c["Phone"] || "")}`;
+      const id =
+        pick(c, COL.candidateId) ||
+        `${pick(c, COL.name).toLowerCase()}|${pick(c, COL.number)}`;
       const prev = byId.get(id);
       if (!prev || tsOf(c) >= tsOf(prev)) byId.set(id, c);
     }
     let list = Array.from(byId.values());
-    if (latestOnly && runStartedAt) {
-      // Rows written during or after this run. Small grace window for clock skew.
-      const cutoff = runStartedAt - 60000;
+    if (run.latestOnly && run.runStartedAt) {
+      const cutoff = run.runStartedAt - 60000;
       const fresh = list.filter((c) => tsOf(c) >= cutoff);
       if (fresh.length) list = fresh;
     }
     return list.sort((a, b) => {
       const d = tsOf(b) - tsOf(a);
       if (d !== 0) return d;
-      return Number(b["Match %"] || 0) - Number(a["Match %"] || 0);
+      return Number(pick(b, COL.match) || 0) - Number(pick(a, COL.match) || 0);
     });
   })();
 
-  // derived stats from the visible set
   const total = visible.length;
   const uniqueTotal = new Set(
-    candidates.map((c) => String(c["Candidate ID"] || "").trim()).filter(Boolean)
+    candidates.map((c) => pick(c, COL.candidateId)).filter(Boolean)
   ).size;
-  const withPhone = visible.filter((c) => String(c["Number"] || c["Phone"] || "").trim()).length;
+  const directPhone = platform.phoneAvailability === "direct";
+  const withPhone = visible.filter((c) => pick(c, COL.number)).length;
+  const unlockable = visible.filter((c) => pick(c, COL.contact).toLowerCase() !== "yes").length;
   const localCount = clusterCities.length
     ? visible.filter((c) => {
-        const hay = String(c["Location"] || "").toLowerCase();
+        const hay = pick(c, COL.location).toLowerCase();
         return clusterCities.some((city) => hay.includes(city));
       }).length
     : 0;
-  const topScore = visible.reduce((m, c) => Math.max(m, Number(c["Match %"] || 0)), 0);
+  const topScore = visible.reduce((m, c) => Math.max(m, Number(pick(c, COL.match) || 0)), 0);
+
+  const phoneNotice = PHONE_NOTICE[platform.phoneAvailability];
+
+  const filteredRuns =
+    runFilter === "all"
+      ? runs
+      : runs.filter((r) => {
+          const src = String(r["Source"] || "").toLowerCase();
+          return src.includes(PLATFORMS[runFilter].label.toLowerCase());
+        });
+
+  function renderCredential(c: CredentialField) {
+    const value = form.credentials[c.name] ?? "";
+    const common = {
+      value,
+      placeholder: c.placeholder,
+      onChange: (e: { target: { value: string } }) => setCredential(active, c.name, e.target.value),
+    };
+    return (
+      <div className="field" key={c.name}>
+        <label>
+          {c.label}
+          {!c.required && <span className="hint"> optional</span>}
+        </label>
+        {c.type === "textarea" ? (
+          <textarea className="cred-area" {...common} />
+        ) : (
+          <input type={c.type === "password" ? "password" : "text"} {...common} />
+        )}
+        {c.helpText && <div className="field-note">{c.helpText}</div>}
+      </div>
+    );
+  }
 
   return (
     <div className="shell">
@@ -283,170 +524,398 @@ export default function Page() {
           </div>
         </div>
 
+        <div className="platform-tabs" role="tablist" aria-label="Sourcing platform">
+          {PLATFORM_IDS.map((id) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={active === id}
+              className={`platform-tab ${active === id ? "on" : ""}`}
+              onClick={() => setActive(id)}
+            >
+              {PLATFORMS[id].label}
+              {runState[id].running && <span className="tab-dot" aria-label="running" />}
+            </button>
+          ))}
+        </div>
+        <div className="platform-note">{platform.notes}</div>
+
         <h1>Source candidates from a JD</h1>
         <p className="lede">
-          Drop in a job description and your Shine session. We pull ranked,
-          India-based candidates with phone numbers into your sheet.
+          Drop in a job description and your {platform.label} session. We pull ranked,
+          India-based candidates into your sheet.
         </p>
 
         <div className="field">
           <label>Job title</label>
-          <input type="text" value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} placeholder="e.g. Academic Counselor" />
+          <input
+            type="text"
+            value={form.jobTitle}
+            onChange={(e) => patchForm(active, { jobTitle: e.target.value })}
+            placeholder="e.g. Academic Counselor"
+          />
         </div>
 
         <div className="field">
           <label>Job description</label>
           <div className="jd-tabs">
-            <button className={`jd-tab ${jdMode === "paste" ? "on" : ""}`} onClick={() => setJdMode("paste")} type="button">Paste text</button>
-            <button className={`jd-tab ${jdMode === "upload" ? "on" : ""}`} onClick={() => setJdMode("upload")} type="button">Upload PDF</button>
+            <button
+              className={`jd-tab ${form.jdMode === "paste" ? "on" : ""}`}
+              onClick={() => patchForm(active, { jdMode: "paste" })}
+              type="button"
+            >
+              Paste text
+            </button>
+            <button
+              className={`jd-tab ${form.jdMode === "upload" ? "on" : ""}`}
+              onClick={() => patchForm(active, { jdMode: "upload" })}
+              type="button"
+            >
+              Upload PDF
+            </button>
           </div>
-          {jdMode === "paste" ? (
-            <textarea value={jobDescription} onChange={(e) => setJobDescription(e.target.value)} placeholder="Paste the full JD here..." />
+          {form.jdMode === "paste" ? (
+            <textarea
+              value={form.jobDescription}
+              onChange={(e) => patchForm(active, { jobDescription: e.target.value })}
+              placeholder="Paste the full JD here..."
+            />
           ) : (
             <>
               <div
-                className={`dropzone ${pdfName ? "parsed" : ""}`}
+                className={`dropzone ${form.pdfName ? "parsed" : ""}`}
                 onClick={() => fileRef.current?.click()}
                 onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) onPdf(f); }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const f = e.dataTransfer.files?.[0];
+                  if (f) onPdf(active, f);
+                }}
               >
-                {pdfBusy ? "Reading PDF..."
-                  : pdfName ? <><strong>{pdfName}</strong> loaded. Text is ready.</>
-                  : <>Drop a JD PDF here or <strong>browse</strong></>}
+                {form.pdfBusy ? (
+                  "Reading PDF..."
+                ) : form.pdfName ? (
+                  <>
+                    <strong>{form.pdfName}</strong> loaded. Text is ready.
+                  </>
+                ) : (
+                  <>
+                    Drop a JD PDF here or <strong>browse</strong>
+                  </>
+                )}
               </div>
-              <input ref={fileRef} type="file" accept="application/pdf" hidden
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) onPdf(f); }} />
-              {jobDescription && jdMode === "upload" && (
-                <textarea style={{ marginTop: 8 }} value={jobDescription} onChange={(e) => setJobDescription(e.target.value)} />
+              <input
+                ref={fileRef}
+                type="file"
+                accept="application/pdf"
+                hidden
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) onPdf(active, f);
+                }}
+              />
+              {form.jobDescription && (
+                <textarea
+                  style={{ marginTop: 8 }}
+                  value={form.jobDescription}
+                  onChange={(e) => patchForm(active, { jobDescription: e.target.value })}
+                />
               )}
             </>
           )}
         </div>
 
         <div className="field">
-          <label>Required skills <span className="hint">comma separated</span></label>
-          <input type="text" value={requiredSkills} onChange={(e) => setRequiredSkills(e.target.value)} placeholder="e.g. Inside Sales, Counseling, CRM" />
+          <label>
+            Required skills <span className="hint">comma separated</span>
+          </label>
+          <input
+            type="text"
+            value={form.requiredSkills}
+            onChange={(e) => patchForm(active, { requiredSkills: e.target.value })}
+            placeholder="e.g. Inside Sales, Counseling, CRM"
+          />
         </div>
 
-        <div className="row2">
-          <div className="field">
-            <label>Location priority</label>
-            <input type="text" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="e.g. Andheri, Mumbai" />
-          </div>
-          <div className="field">
-            <label>Min experience <span className="hint">yrs</span></label>
-            <input type="number" value={minExperience} onChange={(e) => setMinExperience(e.target.value)} placeholder="Optional" />
-          </div>
+        <div className="field">
+          <label>Location priority</label>
+          <input
+            type="text"
+            value={form.location}
+            onChange={(e) => patchForm(active, { location: e.target.value })}
+            placeholder="e.g. Andheri, Mumbai"
+          />
         </div>
+
+        {platform.supports.strictLocation && (
+          <label className="check-field">
+            <input
+              type="checkbox"
+              checked={form.strictLocation}
+              onChange={(e) => patchForm(active, { strictLocation: e.target.checked })}
+            />
+            <span>
+              <b>Strict location</b>
+              <em>Only keep candidates in these cities. Off ranks them higher instead.</em>
+            </span>
+          </label>
+        )}
+
+        {platform.supports.experienceRange && (
+          <div className="row2">
+            <div className="field">
+              <label>
+                Min experience <span className="hint">years</span>
+              </label>
+              <input
+                type="number"
+                min="0"
+                value={form.minExperience}
+                onChange={(e) => patchForm(active, { minExperience: e.target.value })}
+                placeholder="Optional"
+              />
+            </div>
+            <div className="field">
+              <label>
+                Max experience <span className="hint">years</span>
+              </label>
+              <input
+                type="number"
+                min="0"
+                value={form.maxExperience}
+                onChange={(e) => patchForm(active, { maxExperience: e.target.value })}
+                placeholder="Optional"
+              />
+            </div>
+          </div>
+        )}
+
+        {platform.supports.salaryRange && (
+          <div className="row2">
+            <div className="field">
+              <label>
+                Min package <span className="hint">LPA</span>
+              </label>
+              <input
+                type="number"
+                min="0"
+                value={form.minSalary}
+                onChange={(e) => patchForm(active, { minSalary: e.target.value })}
+                placeholder="Optional"
+              />
+            </div>
+            <div className="field">
+              <label>
+                Max package <span className="hint">LPA</span>
+              </label>
+              <input
+                type="number"
+                min="0"
+                value={form.maxSalary}
+                onChange={(e) => patchForm(active, { maxSalary: e.target.value })}
+                placeholder="Optional"
+              />
+            </div>
+          </div>
+        )}
+
+        {platform.supports.ageRange && (
+          <div className="row2">
+            <div className="field">
+              <label>
+                Min age <span className="hint">years</span>
+              </label>
+              <input
+                type="number"
+                min="0"
+                value={form.minAge}
+                onChange={(e) => patchForm(active, { minAge: e.target.value })}
+                placeholder="Optional"
+              />
+            </div>
+            <div className="field">
+              <label>
+                Max age <span className="hint">years</span>
+              </label>
+              <input
+                type="number"
+                min="0"
+                value={form.maxAge}
+                onChange={(e) => patchForm(active, { maxAge: e.target.value })}
+                placeholder="Optional"
+              />
+            </div>
+          </div>
+        )}
 
         <div className="field">
           <label>How many candidates</label>
           <div className="count-pick">
             {COUNTS.map((c) => (
-              <button key={c} type="button" className={`count-opt ${candidateCount === c ? "on" : ""}`} onClick={() => setCandidateCount(c)}>{c}</button>
+              <button
+                key={c}
+                type="button"
+                className={`count-opt ${form.candidateCount === c ? "on" : ""}`}
+                onClick={() => patchForm(active, { candidateCount: c })}
+              >
+                {c}
+              </button>
             ))}
           </div>
         </div>
 
-        <div className="field">
-          <label>Shine keyword <span className="hint">optional, overrides auto</span></label>
-          <input type="text" value={keywordOverride} onChange={(e) => setKeywordOverride(e.target.value)} placeholder="e.g. counsellor, counselor, admission, telecaller" />
-          <div className="field-note">
-            Shine returns one page per search. Rerun the same JD with a different
-            keyword to pull a fresh cohort. Duplicates are merged on Candidate ID.
+        {platform.supports.keywordOverride && (
+          <div className="field">
+            <label>
+              {platform.label} keyword <span className="hint">optional, overrides auto</span>
+            </label>
+            <input
+              type="text"
+              value={form.keywordOverride}
+              onChange={(e) => patchForm(active, { keywordOverride: e.target.value })}
+              placeholder="e.g. counsellor, counselor, admission, telecaller"
+            />
+            <div className="field-note">
+              {platform.label} returns one page per search. Rerun the same JD with a different
+              keyword to pull a fresh cohort. Duplicates are merged on Candidate ID.
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="row2">
           <div className="field">
             <label>Client name</label>
-            <input type="text" value={clientName} onChange={(e) => setClientName(e.target.value)} placeholder="e.g. Boston Institute" />
+            <input
+              type="text"
+              value={form.clientName}
+              onChange={(e) => patchForm(active, { clientName: e.target.value })}
+              placeholder="e.g. Boston Institute"
+            />
           </div>
           <div className="field">
             <label>Notify email</label>
-            <input type="email" value={recipientEmail} onChange={(e) => setRecipientEmail(e.target.value)} placeholder="you@company.com" />
+            <input
+              type="email"
+              value={form.recipientEmail}
+              onChange={(e) => patchForm(active, { recipientEmail: e.target.value })}
+              placeholder="you@company.com"
+            />
           </div>
         </div>
 
         <div className="field">
           <label>Destination Google Sheet URL</label>
-          <input type="text" value={sheetUrl} onChange={(e) => setSheetUrl(e.target.value)} placeholder="Paste the sheet link" />
+          <input
+            type="text"
+            value={form.sheetUrl}
+            onChange={(e) => patchForm(active, { sheetUrl: e.target.value })}
+            placeholder="Paste the sheet link"
+          />
+          <div className="field-note">
+            Results for this tab are read from the <b>{platform.sheetTab}</b> tab.
+          </div>
         </div>
 
         <div className="session-box">
-          <div className="box-title">● Shine session</div>
+          <div className="box-title">{platform.label} session</div>
           <p className="box-note">
-            From a logged-in Shine tab: DevTools then Application then Cookies.
-            Copy csrftoken and sessionid from the same session. Sessions expire
-            in a few hours, so grab a fresh one before a run.
+            Credentials are sent straight to the workflow for this run only. They are never
+            stored or echoed back.
           </p>
-          <div className="field">
-            <label>Cookie <span className="hint">csrftoken=...; sessionid=...</span></label>
-            <input type="text" value={shineCookie}
-              onChange={(e) => { setShineCookie(e.target.value); if (!shineCsrf) setShineCsrf(csrfFromCookie(e.target.value)); }}
-              placeholder="csrftoken=X; sessionid=Y" />
-          </div>
-          <div className="field">
-            <label>CSRF token <span className="hint">auto-filled from cookie</span></label>
-            <input type="text" value={shineCsrf} onChange={(e) => setShineCsrf(e.target.value)} placeholder="csrftoken value only" />
-          </div>
+          {platform.credentials.map(renderCredential)}
         </div>
 
-        <button className="run-btn" onClick={runSourcing} disabled={running}>
-          {running ? "Sourcing..." : "Run sourcing"}
+        <button className="run-btn" onClick={runSourcing} disabled={run.running}>
+          {run.running ? `Sourcing ${platform.label}...` : `Run ${platform.label} sourcing`}
         </button>
 
-        {formErr && <div className="form-err">{formErr}</div>}
+        {run.formErr && <div className="form-err">{run.formErr}</div>}
       </aside>
 
       {/* ---------------- RESULTS CANVAS ---------------- */}
       <main className="canvas">
         <div className="canvas-head">
           <div>
-            <h2>{view === "results" ? "Candidates" : "Past runs"}</h2>
+            <h2>
+              {view === "results" ? `${platform.label} candidates` : "Past runs"}
+            </h2>
             <p>
               {view === "results"
-                ? sheetUrl ? "Live from your sheet, newest first. Duplicate profiles are collapsed by Candidate ID." : "Add a sheet URL to see results here."
+                ? form.sheetUrl
+                  ? `Live from the ${platform.sheetTab} tab, newest first. Duplicate profiles are collapsed by Candidate ID.`
+                  : "Add a sheet URL to see results here."
                 : "Every sourcing run logged to this sheet."}
             </p>
           </div>
           <div className="head-actions">
-            {view === "results" && runStartedAt > 0 && (
+            {view === "results" && run.runStartedAt > 0 && (
               <button
                 type="button"
-                className={`scope-toggle ${latestOnly ? "on" : ""}`}
-                onClick={() => setLatestOnly((v) => !v)}
+                className={`scope-toggle ${run.latestOnly ? "on" : ""}`}
+                onClick={() => patchRun(active, { latestOnly: !run.latestOnly })}
               >
-                {latestOnly ? "This run only" : "All candidates"}
+                {run.latestOnly ? "This run only" : "All candidates"}
               </button>
             )}
             <div className="view-toggle">
-              <button className={view === "results" ? "on" : ""} onClick={() => setView("results")}>Candidates</button>
-              <button className={view === "runs" ? "on" : ""} onClick={() => setView("runs")}>Run history</button>
+              <button className={view === "results" ? "on" : ""} onClick={() => setView("results")}>
+                Candidates
+              </button>
+              <button className={view === "runs" ? "on" : ""} onClick={() => setView("runs")}>
+                Run history
+              </button>
             </div>
           </div>
         </div>
 
-        {justAccepted && loadingResults && (
+        {run.justAccepted && run.loadingResults && (
           <div className="banner">
             <span>●</span>
-            <span>Sourcing kicked off. Pulling from Shine and scoring now. Results will appear below in a few seconds {pollLeft > 0 ? `(checking... ${pollLeft})` : ""}.</span>
+            <span>
+              Sourcing kicked off on {platform.label}. Pulling and scoring now. Results will
+              appear below in a few seconds{" "}
+              {run.pollLeft > 0 ? `(checking... ${run.pollLeft})` : ""}.
+            </span>
+          </div>
+        )}
+
+        {run.timedOut && (
+          <div className="banner warn">
+            <span>●</span>
+            <span>
+              No new rows landed in the {platform.sheetTab} tab within the polling window. The{" "}
+              {platform.label} session or token may have expired, or the workflow may still be
+              running. Grab fresh credentials and try again, or reload once the run finishes.
+            </span>
           </div>
         )}
 
         {view === "results" && (
           <>
+            {phoneNotice && <div className="notice">{phoneNotice}</div>}
+
             <div className="stats">
               <div className="stat">
                 <div className="k">Showing</div>
                 <div className="v mono">{total}</div>
                 <div className="foot">{uniqueTotal ? `${uniqueTotal} unique in sheet` : "in this sheet"}</div>
               </div>
-              <div className="stat signal">
-                <div className="k">With phone</div>
-                <div className="v mono">{withPhone}</div>
-                <div className="foot">{total ? Math.round((withPhone / total) * 100) : 0}% reachable</div>
-              </div>
+              {directPhone ? (
+                <div className="stat signal">
+                  <div className="k">With phone</div>
+                  <div className="v mono">{withPhone}</div>
+                  <div className="foot">{total ? Math.round((withPhone / total) * 100) : 0}% reachable</div>
+                </div>
+              ) : (
+                <div className="stat signal">
+                  <div className="k">Unlockable</div>
+                  <div className="v mono">{unlockable}</div>
+                  <div className="foot">
+                    {platform.phoneAvailability === "masked" ? "reveal costs credits" : "needs a paid unlock"}
+                  </div>
+                </div>
+              )}
               <div className="stat">
                 <div className="k">{cluster || "Local"}</div>
                 <div className="v mono">{localCount}</div>
@@ -459,15 +928,21 @@ export default function Page() {
               </div>
             </div>
 
-            {loadingResults && total === 0 ? (
+            {run.loadingResults && total === 0 ? (
               <div className="loading-block">
                 <div className="spinner" />
-                <div className="working-note"><b>Working through Shine.</b> This takes a few seconds while we source and score.</div>
+                <div className="working-note">
+                  <b>Working through {platform.label}.</b> This takes a few seconds while we source
+                  and score.
+                </div>
               </div>
             ) : total === 0 ? (
               <div className="empty">
                 <div className="big">No candidates yet</div>
-                <div className="small">Run a sourcing job from the left, or paste a sheet URL that already has results. Delivered candidates show up here with phone numbers and match scores.</div>
+                <div className="small">
+                  Run a sourcing job from the left, or paste a sheet URL that already has results
+                  on the {platform.sheetTab} tab.
+                </div>
               </div>
             ) : (
               <div className="table-wrap">
@@ -475,50 +950,76 @@ export default function Page() {
                   <thead>
                     <tr>
                       <th>Priority</th>
-                      <th>Candidate</th>
-                      <th>Phone</th>
-                      <th>Match</th>
-                      <th>Skills</th>
-                      <th></th>
+                      <th>Name</th>
+                      <th>Title</th>
+                      <th>Company</th>
+                      <th>Location</th>
+                      <th>Exp (yrs)</th>
+                      <th>Salary (LPA)</th>
+                      <th>Match %</th>
+                      <th>Number</th>
+                      <th>Contact?</th>
+                      <th>Profile</th>
                     </tr>
                   </thead>
                   <tbody>
                     {visible.map((c, i) => {
-                      const phone = String(c["Number"] || c["Phone"] || "").trim();
-                      const pct = Number(c["Match %"] || 0);
-                      const pri = String(c["Priority"] || "Low");
-                      const link = String(c["Profile Link"] || "");
+                      const phone = pick(c, COL.number);
+                      const pct = Number(pick(c, COL.match) || 0);
+                      const pri = pick(c, COL.priority) || "Low";
+                      const link = pick(c, COL.link);
+                      const contact = pick(c, COL.contact);
+                      const contactYes = contact.toLowerCase() === "yes";
                       return (
-                        <tr key={i}>
-                          <td><span className={`pill pri-${pri}`}>{pri}</span></td>
+                        <tr key={pick(c, COL.candidateId) || `row-${i}`}>
                           <td>
-                            <div className="cand-name">
-                              {link ? <a href={link} target="_blank" rel="noreferrer">{c["Name"]}</a> : c["Name"]}
-                            </div>
-                            <div className="cand-meta">
-                              {[c["Title"], c["Company"]].filter(Boolean).join(" @ ")}
-                              {c["Location"] ? ` · ${c["Location"]}` : ""}
-                            </div>
+                            <span className={`pill pri-${pri}`}>{pri}</span>
                           </td>
                           <td>
-                            {phone
-                              ? <span className="phone-cell mono">{phone}</span>
-                              : <span className="phone-none">on profile</span>}
+                            <span className="cand-name">{pick(c, COL.name) || <Dash />}</span>
                           </td>
+                          <td className="cell-soft">{pick(c, COL.title) || <Dash />}</td>
+                          <td className="cell-soft">{pick(c, COL.company) || <Dash />}</td>
+                          <td className="cell-soft">{pick(c, COL.location) || <Dash />}</td>
+                          <td className="mono cell-num">{pick(c, COL.experience) || <Dash />}</td>
+                          <td className="mono cell-num">{pick(c, COL.salary) || <Dash />}</td>
                           <td>
                             <div className="match-bar-wrap">
                               <span className="match-num mono">{pct}%</span>
-                              <span className="match-bar"><span className="match-fill" style={{ width: `${Math.min(100, pct)}%`, background: matchColor(pct) }} /></span>
+                              <span className="match-bar">
+                                <span
+                                  className="match-fill"
+                                  style={{ width: `${Math.min(100, pct)}%`, background: matchColor(pct) }}
+                                />
+                              </span>
                             </div>
                           </td>
-                          <td style={{ maxWidth: 220 }}>
-                            <span style={{ fontSize: 12, color: "var(--slate-2)" }}>{c["Matching Skills"] || "-"}</span>
+                          <td>
+                            {phone ? (
+                              <div className="phone-wrap">
+                                <span className="phone-cell mono">{phone}</span>
+                                <button className="copy-btn" onClick={() => copyText(phone, `p${i}`)}>
+                                  {copiedKey === `p${i}` ? "Copied" : "Copy"}
+                                </button>
+                              </div>
+                            ) : (
+                              <Dash />
+                            )}
                           </td>
                           <td>
-                            {phone && (
-                              <button className="copy-btn" onClick={() => copyText(phone, `p${i}`)}>
-                                {copiedKey === `p${i}` ? "Copied" : "Copy no."}
-                              </button>
+                            {contact ? (
+                              <span className={`contact-pill ${contactYes ? "yes" : "no"}`}>{contact}</span>
+                            ) : (
+                              <Dash />
+                            )}
+                          </td>
+                          <td>
+                            {link ? (
+                              <a href={link} target="_blank" rel="noreferrer">
+                                Open
+                              </a>
+                            ) : (
+                              <Dash />
                             )}
                           </td>
                         </tr>
@@ -533,26 +1034,56 @@ export default function Page() {
 
         {view === "runs" && (
           <>
-            {runs.length === 0 ? (
+            <div className="run-filter">
+              <button className={runFilter === "all" ? "on" : ""} onClick={() => setRunFilter("all")}>
+                All platforms
+              </button>
+              {PLATFORM_IDS.map((id) => (
+                <button
+                  key={id}
+                  className={runFilter === id ? "on" : ""}
+                  onClick={() => setRunFilter(id)}
+                >
+                  {PLATFORMS[id].label}
+                </button>
+              ))}
+            </div>
+
+            {filteredRuns.length === 0 ? (
               <div className="empty">
                 <div className="big">No runs logged yet</div>
-                <div className="small">Each time you run sourcing, a row lands in the Run Log tab with counts and the top candidate. They will list here newest first.</div>
+                <div className="small">
+                  Each time you run sourcing, a row lands in the Run Log tab with counts and the
+                  top candidate. They list here newest first.
+                </div>
               </div>
             ) : (
               <div className="runs">
-                {runs.map((r, i) => (
+                {filteredRuns.map((r, i) => (
                   <div className="run-card" key={i}>
                     <div>
-                      <div className="run-role">{r["Role"] || "Untitled role"}</div>
+                      <div className="run-role">
+                        {r["Role"] || "Untitled role"}
+                        {r["Source"] && <span className="run-src">{r["Source"]}</span>}
+                      </div>
                       <div className="run-sub">
                         {r["Client"] || "-"} · {r["Date"] ? new Date(r["Date"]).toLocaleString() : ""}
                         {r["Top Candidate"] ? ` · top: ${r["Top Candidate"]} (${r["Top Score"] || 0}%)` : ""}
                       </div>
                     </div>
                     <div className="run-nums">
-                      <div className="rn"><div className="n mono">{r["Candidates Found"] || 0}</div><div className="l">found</div></div>
-                      <div className="rn sig"><div className="n mono">{r["With Numbers"] || 0}</div><div className="l">phones</div></div>
-                      <div className="rn"><div className="n mono">{r["Mumbai"] || 0}</div><div className="l">local</div></div>
+                      <div className="rn">
+                        <div className="n mono">{r["Candidates Found"] || 0}</div>
+                        <div className="l">found</div>
+                      </div>
+                      <div className="rn sig">
+                        <div className="n mono">{r["With Numbers"] || 0}</div>
+                        <div className="l">phones</div>
+                      </div>
+                      <div className="rn">
+                        <div className="n mono">{r["Mumbai"] || 0}</div>
+                        <div className="l">local</div>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -563,4 +1094,8 @@ export default function Page() {
       </main>
     </div>
   );
+}
+
+function Dash() {
+  return <span className="muted-dash">-</span>;
 }

@@ -58,9 +58,11 @@ async function readTab(sheetId: string, tab: string): Promise<Record<string, str
   }
 }
 
-export async function getCandidates(sheetUrl: string) {
+// The tab name comes from the platform registry, so each platform reads its
+// own results tab out of the same spreadsheet.
+export async function getCandidates(sheetUrl: string, tab: string) {
   const id = extractSheetId(sheetUrl);
-  return readTab(id, "Shine.csv");
+  return readTab(id, tab);
 }
 
 export async function getRuns(sheetUrl: string) {
