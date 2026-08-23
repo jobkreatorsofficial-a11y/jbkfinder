@@ -99,7 +99,7 @@ export const PLATFORMS: Record<PlatformId, Platform> = {
       experienceRange: true,
       salaryRange: true,
       ageRange: true,
-      strictLocation: false,
+      strictLocation: true,
       keywordOverride: false,
       pagination: true,
       excludeIds: true,

@@ -414,9 +414,12 @@ export default function Page() {
       payload.page = String(pageOf(f));
     }
     if (p.supports.revealCount) {
-      // Blank means "spend nothing" rather than falling back to the default,
-      // since this field costs credits.
-      payload.revealCount = String(Number(f.revealCount) || 0);
+      // Blank omits the key so the workflow applies its own default of 20. An
+      // explicit 0 is sent through and means reveal nothing.
+      const reveal = f.revealCount.trim();
+      if (reveal && Number.isFinite(Number(reveal))) {
+        payload.revealCount = String(Number(reveal));
+      }
     }
     if (p.supports.excludeIds) {
       // Every Candidate ID already on screen for this platform, so a repeat run
@@ -871,11 +874,13 @@ export default function Page() {
                 <input
                   type="number"
                   min="0"
+                  placeholder="20"
                   value={form.revealCount}
                   onChange={(e) => patchForm(active, { revealCount: e.target.value })}
                 />
                 <div className="field-note">
-                  Credits spent per run. Set to 0 to search without revealing numbers.
+                  Credits spent per run. Set to 0 to search without revealing numbers. Leave
+                  blank for the workflow default of 20.
                 </div>
               </div>
             )}

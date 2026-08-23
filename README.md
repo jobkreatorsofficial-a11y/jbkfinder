@@ -22,7 +22,7 @@ Shine's results waiting.
 | Platform | Sheet tab | Filters wired | Phone numbers |
 | --- | --- | --- | --- |
 | Shine | `Shine.csv` | experience, package, age, strict location, keyword | direct |
-| Foundit | `Foundit` | experience, package, age, page, reveal count | top N revealed with credits, rest masked |
+| Foundit | `Foundit` | experience, package, age, strict location, page, reveal count | top N revealed with credits, rest masked |
 | Apna | `Apna` | experience, package, age, strict location, keyword, page | not in search results, paid unlock |
 
 Where pagination is wired, the **Page** field steps up by itself after each run,
