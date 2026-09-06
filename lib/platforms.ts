@@ -132,9 +132,9 @@ export const PLATFORMS: Record<PlatformId, Platform> = {
       keywordOverride: true,
       pagination: true,
       excludeIds: true,
-      revealCount: false,
+      revealCount: true,
     },
-    phoneAvailability: "unlock_required",
+    phoneAvailability: "masked",
     keywordKey: "apnaKeyword",
     credentials: [
       {
@@ -162,7 +162,7 @@ export const PLATFORMS: Record<PlatformId, Platform> = {
       },
     ],
     notes:
-      "Rich profile data including salary, skills and education, but phone numbers need a paid unlock and are not in search results. Auth token expires.",
+      "Rich profiles (salary, skills, education). Phone numbers are unlocked with credits — the top candidates (up to your reveal count) get their numbers revealed automatically; set reveal count to 0 to search for free. Auth token expires.",
   },
 };
 
@@ -182,5 +182,5 @@ export const PHONE_NOTICE: Record<Platform["phoneAvailability"], string> = {
   unlock_required:
     "Apna does not return phone numbers in search results. Profiles are complete otherwise; contact details need a paid unlock.",
   masked:
-    "Foundit reveals the top-ranked numbers automatically, spending credits. The rest stay masked until revealed.",
+    "The top-ranked numbers (up to your reveal count) are unlocked automatically, spending credits. The rest stay masked until revealed.",
 };

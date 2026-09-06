@@ -166,7 +166,7 @@ function blankForm(platform: Platform): FormState {
     minAge: "",
     maxAge: "",
     page: "1",
-    revealCount: "20",
+    revealCount: platform.id === "apna" ? "0" : "20",
     candidateCount: "25",
     clientName: "",
     recipientEmail: "",

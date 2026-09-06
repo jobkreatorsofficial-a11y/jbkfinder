@@ -45,6 +45,7 @@ function credsForAccount(platform: PlatformId, account: RecruiterAccount): Recor
     apnaAuth: cookie,
     apnaOrgId: String(account.extra?.apnaOrgId || ""),
     apnaWorkspaceId: String(account.extra?.apnaWorkspaceId || ""),
+    apnaMemberId: String(account.extra?.apnaMemberId || ""),
   };
 }
 
