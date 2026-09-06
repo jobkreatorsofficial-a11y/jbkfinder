@@ -17,12 +17,82 @@ import {
   type RunEntry,
 } from "@/lib/runHistory";
 import type { AccountSummary } from "@/lib/supabase";
+import dynamic from "next/dynamic";
+import type { LottieProps } from "lottie-react";
+import livePulse from "@/lib/anim/live-pulse.json";
+
+// lottie-react touches the DOM, so load it client-side only.
+const Lottie = dynamic<LottieProps>(
+  () => import("lottie-react").then((m) => m.Lottie),
+  { ssr: false }
+);
 
 type Candidate = Record<string, string>;
 
 const COUNTS = ["25", "40"];
 const POLL_INTERVAL_MS = 3000;
 const MAX_TICKS = 45; // roughly 135 seconds
+const REFRESH_MS = 15000;
+
+// Eases a displayed number toward its target so the stat cards "count up"
+// whenever the underlying data changes on a live refresh.
+function useCountUp(target: number, ms = 650): number {
+  const [val, setVal] = useState(target);
+  const ref = useRef(target);
+  useEffect(() => {
+    const from = ref.current;
+    const to = target;
+    if (from === to) return;
+    const start = performance.now();
+    let raf = 0;
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / ms);
+      const eased = 1 - Math.pow(1 - t, 3);
+      const cur = Math.round(from + (to - from) * eased);
+      ref.current = cur;
+      setVal(cur);
+      if (t < 1) raf = requestAnimationFrame(step);
+      else {
+        ref.current = to;
+        setVal(to);
+      }
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [target, ms]);
+  return val;
+}
+
+function RefreshIcon() {
+  return (
+    <svg
+      className="refresh-ico"
+      viewBox="0 0 24 24"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+      <path d="M21 3v6h-6" />
+    </svg>
+  );
+}
+
+// Green "live" pill with a Lottie radar-ping — signals the data auto-refreshes.
+function LiveBadge() {
+  return (
+    <span className="live-badge" title="Live — data refreshes automatically">
+      <span className="live-lottie">
+        <Lottie src={livePulse} loop autoplay />
+      </span>
+      Live
+    </span>
+  );
+}
 
 interface FormState {
   jobTitle: string;
@@ -243,6 +313,7 @@ export default function Page() {
   const [runFilter, setRunFilter] = useState<"all" | PlatformId>("all");
   const [view, setView] = useState<"results" | "runs">("results");
   const [copiedKey, setCopiedKey] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
 
   // Recruiter logins for the active platform, loaded from the account registry.
   const [accounts, setAccounts] = useState<ByPlatform<AccountSummary[]>>(() =>
@@ -413,6 +484,35 @@ export default function Page() {
     loadResults(active, activeSheetUrl);
     fetchAccounts(active);
   }, [active, activeSheetUrl, loadResults, fetchAccounts]);
+
+  // Manual refresh: pull the latest stored candidates + run history, with a
+  // brief spinner and card flash for feedback.
+  const doRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([loadResults(active, activeSheetUrl), loadRuns()]);
+    } finally {
+      window.setTimeout(() => setRefreshing(false), 550);
+    }
+  }, [active, activeSheetUrl, loadResults, loadRuns]);
+
+  // Real-time feel: silently refresh on a timer and whenever the tab regains
+  // focus/visibility, so the numbers update every time a page is opened.
+  useEffect(() => {
+    const tick = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      loadResults(active, activeSheetUrl);
+      if (view === "runs") loadRuns();
+    };
+    const iv = window.setInterval(tick, REFRESH_MS);
+    window.addEventListener("focus", tick);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      window.clearInterval(iv);
+      window.removeEventListener("focus", tick);
+      document.removeEventListener("visibilitychange", tick);
+    };
+  }, [active, activeSheetUrl, view, loadResults, loadRuns]);
 
   useEffect(() => {
     const timers = pollTimers.current;
@@ -655,6 +755,11 @@ export default function Page() {
       }).length
     : 0;
   const topScore = visible.reduce((m, c) => Math.max(m, Number(pick(c, COL.match) || 0)), 0);
+  const aTotal = useCountUp(total);
+  const aWithPhone = useCountUp(withPhone);
+  const aUnlockable = useCountUp(unlockable);
+  const aLocal = useCountUp(localCount);
+  const aTop = useCountUp(topScore);
 
   const phoneNotice = PHONE_NOTICE[platform.phoneAvailability];
 
@@ -1096,6 +1201,7 @@ export default function Page() {
             </p>
           </div>
           <div className="head-actions">
+            <LiveBadge />
             {view === "results" && run.runStartedAt > 0 && (
               <button
                 type="button"
@@ -1105,11 +1211,14 @@ export default function Page() {
                 {run.latestOnly ? "This run only" : "All candidates"}
               </button>
             )}
-            {view === "runs" && (
-              <button type="button" className="link-btn" onClick={() => loadRuns()}>
-                Refresh
-              </button>
-            )}
+            <button
+              type="button"
+              className={`refresh-btn ${refreshing ? "spinning" : ""}`}
+              onClick={doRefresh}
+              title="Refresh data now"
+            >
+              <RefreshIcon /> Refresh
+            </button>
             <div className="view-toggle">
               <button className={view === "results" ? "on" : ""} onClick={() => setView("results")}>
                 Candidates
@@ -1157,22 +1266,22 @@ export default function Page() {
           <>
             {phoneNotice && <div className="notice">{phoneNotice}</div>}
 
-            <div className="stats">
+            <div className={`stats ${refreshing ? "flash" : ""}`}>
               <div className="stat">
                 <div className="k">Showing</div>
-                <div className="v mono">{total}</div>
+                <div className="v mono">{aTotal}</div>
                 <div className="foot">{uniqueTotal ? `${uniqueTotal} unique in sheet` : "in this sheet"}</div>
               </div>
               {directPhone ? (
                 <div className="stat signal">
                   <div className="k">With phone</div>
-                  <div className="v mono">{withPhone}</div>
+                  <div className="v mono">{aWithPhone}</div>
                   <div className="foot">{total ? Math.round((withPhone / total) * 100) : 0}% reachable</div>
                 </div>
               ) : (
                 <div className="stat signal">
                   <div className="k">Unlockable</div>
-                  <div className="v mono">{unlockable}</div>
+                  <div className="v mono">{aUnlockable}</div>
                   <div className="foot">
                     {platform.phoneAvailability === "masked" ? "reveal costs credits" : "needs a paid unlock"}
                   </div>
@@ -1180,12 +1289,12 @@ export default function Page() {
               )}
               <div className="stat">
                 <div className="k">{cluster || "Local"}</div>
-                <div className="v mono">{localCount}</div>
+                <div className="v mono">{aLocal}</div>
                 <div className="foot">{cluster ? "location priority" : "set a location"}</div>
               </div>
               <div className="stat">
                 <div className="k">Top match</div>
-                <div className="v mono">{topScore}%</div>
+                <div className="v mono">{aTop}%</div>
                 <div className="foot">best fit</div>
               </div>
             </div>
@@ -1200,10 +1309,10 @@ export default function Page() {
               </div>
             ) : total === 0 ? (
               <div className="empty">
+                <div className="empty-radar" aria-hidden="true"><span /><span /><span /></div>
                 <div className="big">No candidates yet</div>
                 <div className="small">
-                  Run a sourcing job from the left, or paste a sheet URL that already has results
-                  on the {platform.sheetTab} tab.
+                  Run a sourcing job from the left. Results appear here live as they land.
                 </div>
               </div>
             ) : (
@@ -1233,7 +1342,11 @@ export default function Page() {
                       const contact = pick(c, COL.contact);
                       const contactYes = contactReady(contact);
                       return (
-                        <tr key={pick(c, COL.candidateId) || `row-${i}`}>
+                        <tr
+                          key={pick(c, COL.candidateId) || `row-${i}`}
+                          className="cand-row"
+                          style={{ animationDelay: `${Math.min(i, 24) * 18}ms` }}
+                        >
                           <td>
                             <span className={`pill pri-${pri}`}>{pri}</span>
                           </td>

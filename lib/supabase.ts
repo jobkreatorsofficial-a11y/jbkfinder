@@ -242,6 +242,8 @@ interface CandidateReadRow {
 
 // Read candidates back for the dashboard. Returns the stored `data` blob merged
 // with the source account, so the dashboard's column logic works unchanged.
+// PostgREST caps a single response at 1000 rows, so this pages through with the
+// Range header until every stored candidate is pulled (Foundit alone exceeds 1k).
 export async function getCandidates(
   platform: string,
   sinceIso?: string
@@ -250,13 +252,26 @@ export async function getCandidates(
     select: "data,source_account,sourced_at",
     platform: `eq.${platform}`,
     order: "sourced_at.desc",
-    limit: "2000",
   });
   if (sinceIso) q.set("sourced_at", `gte.${sinceIso}`);
-  const rows = (await req(`candidates?${q}`, { method: "GET", headers: headers() })) as
-    | CandidateReadRow[]
-    | null;
-  return (rows || []).map((r) => ({ ...(r.data || {}), _account: r.source_account || "" }));
+
+  const PAGE = 1000;
+  const out: CandidateRow[] = [];
+  for (let from = 0; from <= 20000; from += PAGE) {
+    const to = from + PAGE - 1;
+    const res = await fetch(`${URL.replace(/\/$/, "")}/rest/v1/candidates?${q}`, {
+      method: "GET",
+      headers: headers({ "Range-Unit": "items", Range: `${from}-${to}` }),
+    });
+    if (!res.ok) {
+      throw new Error(`Supabase ${res.status}: ${(await res.text().catch(() => "")).slice(0, 200)}`);
+    }
+    const text = await res.text();
+    const rows = (text.trim() ? JSON.parse(text) : []) as CandidateReadRow[];
+    for (const r of rows) out.push({ ...(r.data || {}), _account: r.source_account || "" });
+    if (rows.length < PAGE) break;
+  }
+  return out;
 }
 
 // ── runs ────────────────────────────────────────────────────────────────────
