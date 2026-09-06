@@ -193,6 +193,33 @@ a:hover { text-decoration: underline; }
 }
 .session-box .box-note { font-size: 11.5px; color: var(--slate-2); margin: 0 0 11px; line-height: 1.45; }
 
+/* Recruiter-login rows inside the session panel. */
+.acct-row {
+  border-top: 1px solid var(--line);
+  padding: 10px 0 12px;
+}
+.acct-row:first-of-type { border-top: none; }
+.acct-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-bottom: 6px;
+}
+.acct-toggle { display: flex; align-items: center; gap: 7px; cursor: pointer; }
+.acct-label { font-size: 12.5px; font-weight: 600; color: var(--slate-1); }
+.acct-status {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .5px; font-weight: 700;
+  padding: 2px 7px; border-radius: 999px;
+}
+.acct-status.ok { color: #2E9E6B; background: rgba(46, 158, 107, .12); }
+.acct-status.off { color: var(--slate-2); background: rgba(154, 163, 192, .1); }
+.acct-save {
+  margin-top: 6px; font-size: 11.5px; font-weight: 600;
+  padding: 5px 12px; border-radius: var(--r-sm);
+  border: 1px solid var(--line); background: rgba(10, 15, 30, .6);
+  color: var(--slate-1); cursor: pointer;
+}
+.acct-save:disabled { opacity: .45; cursor: default; }
+.acct-save:not(:disabled):hover { border-color: var(--amber); color: var(--amber); }
+
 .run-btn {
   width: 100%;
   margin-top: 18px;

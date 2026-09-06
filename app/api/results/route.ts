@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCandidates, isSheetsConfigured } from "@/lib/sheets";
+import { getCandidates, isSupabaseConfigured } from "@/lib/supabase";
 import { getPlatform } from "@/lib/platforms";
 
 export const runtime = "nodejs";
 
-// Reads the candidate rows the workflow wrote to the platform's results tab.
-// Candidates normally arrive on the webhook response now; this backs the
-// polling fallback and the initial load for a pasted sheet URL.
-// A missing platform param falls back to Shine so older callers keep working.
+// Reads stored candidates for a platform from Supabase. Candidates now arrive on
+// the source fan-out response, so this backs the initial load and any refresh.
+// `configured` tells the dashboard whether an empty list means "nothing stored"
+// or "Supabase is not wired up", so it never clears candidates the run returned.
 
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown> = {};
@@ -18,27 +18,20 @@ export async function POST(req: NextRequest) {
   }
 
   const platform = getPlatform(req.nextUrl.searchParams.get("platform") ?? body?.platform);
-
-  const sheetUrl = String(body?.sheetUrl ?? "").trim();
-  if (!sheetUrl) {
-    return NextResponse.json({ ok: false, error: "No sheet selected." }, { status: 400 });
-  }
+  const since = typeof body?.since === "string" ? body.since : undefined;
 
   try {
-    const rows = await getCandidates(sheetUrl, platform.sheetTab);
-    // `configured` tells the dashboard whether an empty list means "the tab is
-    // empty" or "we cannot read the sheet at all", so it knows not to clear
-    // candidates that came back on the webhook response.
+    const candidates = await getCandidates(platform.id, since);
     return NextResponse.json({
       ok: true,
       platform: platform.id,
-      configured: isSheetsConfigured(),
-      candidates: rows,
+      configured: isSupabaseConfigured(),
+      candidates,
     });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "";
     return NextResponse.json(
-      { ok: false, error: msg || "Could not read candidates from the sheet." },
+      { ok: false, error: msg || "Could not read candidates." },
       { status: 500 }
     );
   }

@@ -148,15 +148,38 @@ gives a clean cumulative count.
 
 - `app/page.tsx` holds all client state, keyed by platform id
 - `lib/platforms.ts` is the platform registry, the single source of truth
-- `app/api/source/route.ts` resolves the webhook from the platform and forwards
-- `app/api/results/route.ts` resolves the sheet tab from the platform and reads
-  it; this now only backs the polling fallback and loading an existing sheet
+- `app/api/source/route.ts` resolves the webhook and runs the job. If the
+  Supabase recruiter-account registry has active logins for the platform, it
+  fans out one webhook call per login in parallel, aggregates + dedupes the
+  results, stores them, and returns the merged list. With no registry it falls
+  back to the single cookie posted with the request, so the console keeps
+  working before Supabase is set up.
+- `app/api/accounts/route.ts` manages the per-login session cookies (attach,
+  toggle active). Cookies live only in Supabase behind the service role and are
+  never returned to the browser.
+- `app/api/results/route.ts` reads stored candidates for a platform from Supabase
+- `app/api/runs/route.ts` reads shared run history from Supabase
 - `app/api/parse-pdf/route.ts` extracts text from an uploaded JD PDF
-- `lib/sheets.ts` is the read-only Google Sheets helper
-- `lib/runHistory.ts` is the localStorage-backed run history
+- `lib/supabase.ts` is the server-side Supabase (PostgREST) helper
+- `lib/sheets.ts` is the legacy read-only Google Sheets helper (being retired)
+- `lib/runHistory.ts` is the legacy localStorage run history (being retired)
 
-Google Sheets access is read-only via service account, and optional: without it
-the sheet reads come back empty instead of erroring. n8n does all writing.
+Storage moved from the Google Sheet to Supabase (`supabase/migrations/0001_init.sql`,
+`supabase/seed.sql`). The candidate store, the recruiter-account registry and run
+history all live there; the dashboard reads through the Next API using the
+service-role key (RLS on, no anon access — candidate rows are PII, cookies are
+secret).
+
+### n8n resilience
+
+The n8n `N8N_ENCRYPTION_KEY` changed at some point, orphaning every stored
+Google/Gmail/Gemini credential. Because the Google Sheets write aborted the run
+before `Respond With Candidates`, the dashboard got nothing. The three workflows
+now set the Sheets / Gmail / run-log nodes (and Shine's Gemini JD-parse) to
+*continue-on-error*, so `Respond` always fires and returns the scored
+candidates. Storage is handled by the Next API into Supabase instead. Restoring
+the original encryption key is optional now: it sharpens Shine's ranking (the
+Gemini skill-parse) and re-enables the summary emails.
 
 ## Local development
 

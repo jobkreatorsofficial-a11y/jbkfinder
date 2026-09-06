@@ -16,6 +16,7 @@ import {
   readRunHistory,
   type RunEntry,
 } from "@/lib/runHistory";
+import type { AccountSummary } from "@/lib/supabase";
 
 type Candidate = Record<string, string>;
 
@@ -243,6 +244,14 @@ export default function Page() {
   const [view, setView] = useState<"results" | "runs">("results");
   const [copiedKey, setCopiedKey] = useState("");
 
+  // Recruiter logins for the active platform, loaded from the account registry.
+  const [accounts, setAccounts] = useState<ByPlatform<AccountSummary[]>>(() =>
+    initialBy<AccountSummary[]>(() => [])
+  );
+  const [cookieDraft, setCookieDraft] = useState<Record<string, string>>({});
+  const [acctBusy, setAcctBusy] = useState(false);
+  const [acctMsg, setAcctMsg] = useState("");
+
   const fileRef = useRef<HTMLInputElement>(null);
   // One poll timer per platform, so a Shine run keeps polling while the
   // recruiter works on the Apna tab.
@@ -288,7 +297,6 @@ export default function Page() {
   );
 
   const loadResults = useCallback(async (id: PlatformId, url: string): Promise<Candidate[]> => {
-    if (!url.trim()) return [];
     try {
       const r = await fetch(`/api/results?platform=${encodeURIComponent(id)}`, {
         method: "POST",
@@ -310,15 +318,101 @@ export default function Page() {
     return [];
   }, [rememberIds]);
 
-  // History is local to the browser, so it is read once on mount.
-  useEffect(() => {
-    setRuns(readRunHistory());
+  // Run history is shared across recruiters via Supabase now, not localStorage.
+  const loadRuns = useCallback(async () => {
+    try {
+      const r = await fetch("/api/runs");
+      const d = await r.json();
+      if (d.ok && Array.isArray(d.runs)) {
+        setRuns(
+          d.runs.map((x: Record<string, unknown>): RunEntry => ({
+            id: String(x.id ?? ""),
+            platform: (x.platform as PlatformId) ?? "shine",
+            timestamp: String(x.created_at ?? new Date().toISOString()),
+            jobTitle: String(x.job_title ?? ""),
+            clientName: String(x.client_name ?? ""),
+            location: String(x.location ?? ""),
+            candidateCount: Number(x.candidate_count ?? 0),
+            revealedCount: Number(x.revealed_count ?? 0),
+            topCandidate: String(x.top_candidate ?? ""),
+            topScore: Number(x.top_score ?? 0),
+            page: Number(x.page ?? 1),
+          }))
+        );
+      }
+    } catch {
+      // History is a convenience; a failed load is not fatal.
+    }
   }, []);
+
+  const fetchAccounts = useCallback(async (id: PlatformId) => {
+    try {
+      const r = await fetch(`/api/accounts?platform=${id}`);
+      const d = await r.json();
+      if (d.ok && Array.isArray(d.accounts)) {
+        setAccounts((prev) => ({ ...prev, [id]: d.accounts as AccountSummary[] }));
+      }
+    } catch {
+      // Leave the current list in place on a failed refresh.
+    }
+  }, []);
+
+  const saveCookie = useCallback(
+    async (id: PlatformId, label: string) => {
+      const key = `${id}:${label}`;
+      const cookie = (cookieDraft[key] || "").trim();
+      if (!cookie) return;
+      setAcctBusy(true);
+      setAcctMsg("");
+      try {
+        const r = await fetch("/api/accounts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ platform: id, label, cookie }),
+        });
+        const d = await r.json();
+        if (d.ok) {
+          setCookieDraft((p) => ({ ...p, [key]: "" }));
+          setAcctMsg(`Saved cookie for ${label}.`);
+          fetchAccounts(id);
+        } else {
+          setAcctMsg(d.error || "Could not save the cookie.");
+        }
+      } catch {
+        setAcctMsg("Could not save the cookie.");
+      } finally {
+        setAcctBusy(false);
+      }
+    },
+    [cookieDraft, fetchAccounts]
+  );
+
+  const toggleActive = useCallback(
+    async (id: PlatformId, acctId: string, active: boolean) => {
+      try {
+        await fetch("/api/accounts", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: acctId, active }),
+        });
+        fetchAccounts(id);
+      } catch {
+        // ignore; the next refresh reconciles.
+      }
+    },
+    [fetchAccounts]
+  );
+
+  // Shared run history and the account registry both load on mount / tab switch.
+  useEffect(() => {
+    loadRuns();
+  }, [loadRuns]);
 
   const activeSheetUrl = form.sheetUrl;
   useEffect(() => {
-    if (activeSheetUrl.trim()) loadResults(active, activeSheetUrl);
-  }, [active, activeSheetUrl, loadResults]);
+    loadResults(active, activeSheetUrl);
+    fetchAccounts(active);
+  }, [active, activeSheetUrl, loadResults, fetchAccounts]);
 
   useEffect(() => {
     const timers = pollTimers.current;
@@ -429,13 +523,6 @@ export default function Page() {
     if (p.supports.keywordOverride && p.keywordKey) {
       payload[p.keywordKey] = f.keywordOverride.trim().toLowerCase();
     }
-    for (const c of p.credentials) {
-      let value = f.credentials[c.name] || "";
-      if (id === "shine" && c.name === "shineCsrf" && !value.trim()) {
-        value = csrfFromCookie(f.credentials.shineCookie || "");
-      }
-      payload[c.name] = value.trim();
-    }
     return payload;
   }
 
@@ -445,31 +532,20 @@ export default function Page() {
     const f = forms[id];
     patchRun(id, { formErr: "" });
 
-    const required: [string, string][] = [
-      ["Job title", f.jobTitle],
-      ["Job description", f.jobDescription],
-      ["Client name", f.clientName],
-      ["Sheet URL", f.sheetUrl],
-      ["Notify email", f.recipientEmail],
-      ...p.credentials
-        .filter((c) => c.required)
-        .map((c) => [c.label, f.credentials[c.name] || ""] as [string, string]),
-    ];
-    const missing = required.filter(([, v]) => !String(v).trim()).map(([k]) => k);
-    if (missing.length) {
-      patchRun(id, { formErr: `Fill in: ${missing.join(", ")}.` });
-      return;
-    }
+  const required: [string, string][] = [
+    ["Job title", f.jobTitle],
+    ["Job description", f.jobDescription],
+    ["Client name", f.clientName],
+    ["Sheet URL", f.sheetUrl],
+    ["Notify email", f.recipientEmail],
+  ];
+  const missing = required.filter(([, v]) => !String(v).trim()).map(([k]) => k);
+  if (missing.length) {
+    patchRun(id, { formErr: `Fill in: ${missing.join(", ")}.` });
+    return;
+  }
 
-    const payload = buildPayload(id);
-
-    if (id === "shine" && !payload.shineCsrf) {
-      patchRun(id, {
-        formErr:
-          "Could not find the csrf token. Paste the CSRF value, or include csrftoken=... in the cookie.",
-      });
-      return;
-    }
+  const payload = buildPayload(id);
 
     const pageUsed = pageOf(f);
     const startedAt = Date.now();
@@ -504,33 +580,29 @@ export default function Page() {
       // same JD keep pulling fresh people.
       if (p.supports.pagination) patchForm(id, { page: String(pageUsed + 1) });
 
-      // The webhook returns the scored candidates itself, so show them straight
-      // away. Only fall back to polling the sheet when it came back empty,
-      // which means an older workflow that only writes to the sheet.
-      const direct = (Array.isArray(d.candidates) ? d.candidates : []) as Candidate[];
-      if (direct.length) {
-        setResults((prev) => ({ ...prev, [id]: direct }));
-        rememberIds(id, direct);
-        patchRun(id, {
-          running: false,
-          submitting: false,
-          justAccepted: true,
-          loadingResults: false,
-          timedOut: false,
-        });
-        setRuns(appendRun(buildRunEntry(id, f, direct, pageUsed)));
-        return;
-      }
-
-      patchRun(id, { submitting: false, justAccepted: true });
-      startPolling(id, f.sheetUrl, startedAt, { form: f, page: pageUsed });
-    } catch {
-      patchRun(id, {
-        formErr: "Could not reach the sourcing service.",
-        running: false,
-        submitting: false,
-      });
+    // The fan-out returns the scored candidates inline; show them straight away.
+    const direct = (Array.isArray(d.candidates) ? d.candidates : []) as Candidate[];
+    setResults((prev) => ({ ...prev, [id]: direct }));
+    rememberIds(id, direct);
+    patchRun(id, {
+      running: false,
+      submitting: false,
+      justAccepted: true,
+      loadingResults: false,
+      timedOut: false,
+    });
+    if (!direct.length && Array.isArray(d.accounts)) {
+      const failed = d.accounts.filter((a: { ok: boolean }) => !a.ok).length;
+      if (failed) patchRun(id, { formErr: `No candidates — ${failed} login(s) failed. Refresh their cookies.` });
     }
+    loadRuns();
+  } catch {
+    patchRun(id, {
+      formErr: "Could not reach the sourcing service.",
+      running: false,
+      submitting: false,
+    });
+  }
   }
 
   function copyText(txt: string, key: string) {
@@ -956,12 +1028,50 @@ export default function Page() {
         </div>
 
         <div className="session-box">
-          <div className="box-title">{platform.label} session</div>
+          <div className="box-title">{platform.label} logins</div>
           <p className="box-note">
-            Credentials are sent straight to the workflow for this run only. They are never
-            stored or echoed back.
+            Paste a fresh session cookie for each recruiter login. A run fans out across
+            every active login that has a cookie and merges the results. Cookies are stored
+            server-side and never shown back.
           </p>
-          {platform.credentials.map(renderCredential)}
+          {(accounts[active] || []).map((a) => {
+            const key = `${active}:${a.label}`;
+            return (
+              <div className="acct-row" key={a.id}>
+                <div className="acct-head">
+                  <label className="acct-toggle">
+                    <input
+                      type="checkbox"
+                      checked={a.active}
+                      onChange={(e) => toggleActive(active, a.id, e.target.checked)}
+                    />
+                    <span className="acct-label">{a.label}</span>
+                  </label>
+                  <span className={`acct-status ${a.hasCookie ? "ok" : "off"}`}>
+                    {a.hasCookie ? "session attached" : "no cookie"}
+                  </span>
+                </div>
+                <textarea
+                  className="cred-area"
+                  placeholder={a.hasCookie ? "Paste a fresh cookie to replace" : "Paste this login's cookie"}
+                  value={cookieDraft[key] ?? ""}
+                  onChange={(e) => setCookieDraft((p) => ({ ...p, [key]: e.target.value }))}
+                />
+                <button
+                  type="button"
+                  className="acct-save"
+                  disabled={acctBusy || !(cookieDraft[key] || "").trim()}
+                  onClick={() => saveCookie(active, a.label)}
+                >
+                  Save cookie
+                </button>
+              </div>
+            );
+          })}
+          {(accounts[active] || []).length === 0 && (
+            <div className="field-note">No logins configured for {platform.label} yet.</div>
+          )}
+          {acctMsg && <div className="field-note">{acctMsg}</div>}
         </div>
 
         <button className="run-btn" onClick={runSourcing} disabled={run.running}>
@@ -981,10 +1091,8 @@ export default function Page() {
             </h2>
             <p>
               {view === "results"
-                ? form.sheetUrl
-                  ? `Live from the ${platform.sheetTab} tab, newest first. Duplicate profiles are collapsed by Candidate ID.`
-                  : "Add a sheet URL to see results here."
-                : "Sourcing runs from this browser, newest first."}
+                ? "Merged across every active login, newest first. Duplicates collapse by Candidate ID."
+                : "Sourcing runs, newest first."}
             </p>
           </div>
           <div className="head-actions">
@@ -997,16 +1105,9 @@ export default function Page() {
                 {run.latestOnly ? "This run only" : "All candidates"}
               </button>
             )}
-            {view === "runs" && runs.length > 0 && (
-              <button
-                type="button"
-                className="link-btn"
-                onClick={() => {
-                  clearRunHistory();
-                  setRuns([]);
-                }}
-              >
-                Clear history
+            {view === "runs" && (
+              <button type="button" className="link-btn" onClick={() => loadRuns()}>
+                Refresh
               </button>
             )}
             <div className="view-toggle">
