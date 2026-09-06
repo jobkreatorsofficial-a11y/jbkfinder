@@ -29,6 +29,21 @@ const Lottie = dynamic<LottieProps>(
 
 type Candidate = Record<string, string>;
 
+const PAGE_SIZE = 25;
+
+// Windowed page numbers for the candidate pager (e.g. 1 … 4 5 6 … 45).
+function pageWindow(cur: number, count: number): (number | "ellipsis")[] {
+  if (count <= 7) return Array.from({ length: count }, (_, i) => i + 1);
+  const out: (number | "ellipsis")[] = [1];
+  const lo = Math.max(2, cur - 1);
+  const hi = Math.min(count - 1, cur + 1);
+  if (lo > 2) out.push("ellipsis");
+  for (let p = lo; p <= hi; p++) out.push(p);
+  if (hi < count - 1) out.push("ellipsis");
+  out.push(count);
+  return out;
+}
+
 const COUNTS = ["25", "40"];
 const POLL_INTERVAL_MS = 3000;
 const MAX_TICKS = 45; // roughly 135 seconds
@@ -314,6 +329,7 @@ export default function Page() {
   const [view, setView] = useState<"results" | "runs">("results");
   const [copiedKey, setCopiedKey] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [resultsPage, setResultsPage] = useState(1);
 
   // A run opened from history: shows the exact candidates that run returned.
   const [selectedRun, setSelectedRun] = useState<{
@@ -778,6 +794,17 @@ export default function Page() {
   const aUnlockable = useCountUp(unlockable);
   const aLocal = useCountUp(localCount);
   const aTop = useCountUp(topScore);
+
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const curPage = Math.min(Math.max(1, resultsPage), pageCount);
+  const pageStart = (curPage - 1) * PAGE_SIZE;
+  const pagedVisible = visible.slice(pageStart, pageStart + PAGE_SIZE);
+  const pageList = pageWindow(curPage, pageCount);
+
+  // Reset to page 1 when the platform, scope, or run changes.
+  useEffect(() => {
+    setResultsPage(1);
+  }, [active, run.latestOnly, run.runStartedAt]);
 
   const phoneNotice = PHONE_NOTICE[platform.phoneAvailability];
 
@@ -1352,7 +1379,7 @@ export default function Page() {
                     </tr>
                   </thead>
                   <tbody>
-                    {visible.map((c, i) => {
+                    {pagedVisible.map((c, i) => {
                       const phone = pick(c, COL.number);
                       const pct = Number(pick(c, COL.match) || 0);
                       const pri = pick(c, COL.priority) || "Low";
@@ -1420,6 +1447,47 @@ export default function Page() {
                     })}
                   </tbody>
                 </table>
+                {pageCount > 1 && (
+                  <div className="pager">
+                    <span className="pager-info">
+                      {pageStart + 1}–{Math.min(pageStart + PAGE_SIZE, total)} of {total}
+                    </span>
+                    <div className="pager-controls">
+                      <button
+                        type="button"
+                        className="pager-btn"
+                        disabled={curPage <= 1}
+                        onClick={() => setResultsPage(curPage - 1)}
+                        aria-label="Previous page"
+                      >
+                        ‹
+                      </button>
+                      {pageList.map((p, idx) =>
+                        p === "ellipsis" ? (
+                          <span key={`e${idx}`} className="pager-gap">…</span>
+                        ) : (
+                          <button
+                            key={p}
+                            type="button"
+                            className={`pager-btn ${p === curPage ? "on" : ""}`}
+                            onClick={() => setResultsPage(p)}
+                          >
+                            {p}
+                          </button>
+                        )
+                      )}
+                      <button
+                        type="button"
+                        className="pager-btn"
+                        disabled={curPage >= pageCount}
+                        onClick={() => setResultsPage(curPage + 1)}
+                        aria-label="Next page"
+                      >
+                        ›
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </>

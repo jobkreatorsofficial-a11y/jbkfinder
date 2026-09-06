@@ -815,3 +815,38 @@ table.cand .match-num { min-width: 30px; }
 }
 .run-modal-close:hover { border-color: var(--amber); color: var(--amber); }
 .run-modal-body { overflow: auto; padding: 4px 4px 8px; }
+
+/* ---------- Candidate pager ---------- */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 6px 4px;
+  position: sticky;
+  bottom: 0;
+}
+.pager-info { font-size: 12px; color: var(--slate-2); }
+.pager-controls { display: flex; align-items: center; gap: 5px; }
+.pager-btn {
+  min-width: 30px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: rgba(10, 15, 30, .55);
+  color: var(--slate-1);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color .12s ease, color .12s ease, background .12s ease;
+}
+.pager-btn:hover:not(:disabled) { border-color: var(--brand, #6c63ff); color: var(--brand, #6c63ff); }
+.pager-btn.on {
+  background: var(--brand, #6c63ff);
+  border-color: var(--brand, #6c63ff);
+  color: #fff;
+}
+.pager-btn:disabled { opacity: .4; cursor: default; }
+.pager-gap { color: var(--slate-2); padding: 0 2px; }
