@@ -315,6 +315,24 @@ export default function Page() {
   const [copiedKey, setCopiedKey] = useState("");
   const [refreshing, setRefreshing] = useState(false);
 
+  // A run opened from history: shows the exact candidates that run returned.
+  const [selectedRun, setSelectedRun] = useState<{
+    entry: RunEntry;
+    candidates: Candidate[];
+    loading: boolean;
+  } | null>(null);
+
+  const openRun = useCallback(async (entry: RunEntry) => {
+    setSelectedRun({ entry, candidates: [], loading: true });
+    try {
+      const r = await fetch(`/api/runs?id=${encodeURIComponent(entry.id)}`);
+      const d = await r.json();
+      setSelectedRun({ entry, candidates: (d.candidates || []) as Candidate[], loading: false });
+    } catch {
+      setSelectedRun({ entry, candidates: [], loading: false });
+    }
+  }, []);
+
   // Recruiter logins for the active platform, loaded from the account registry.
   const [accounts, setAccounts] = useState<ByPlatform<AccountSummary[]>>(() =>
     initialBy<AccountSummary[]>(() => [])
@@ -1432,7 +1450,19 @@ export default function Page() {
             ) : (
               <div className="runs">
                 {filteredRuns.map((r) => (
-                  <div className="run-card" key={r.id}>
+                  <div
+                    className="run-card clickable"
+                    key={r.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => openRun(r)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        openRun(r);
+                      }
+                    }}
+                  >
                     <div>
                       <div className="run-role">
                         {r.jobTitle || "Untitled role"}
@@ -1465,6 +1495,124 @@ export default function Page() {
           </>
         )}
       </main>
+
+      {selectedRun && (
+        <div className="run-modal-overlay" onClick={() => setSelectedRun(null)}>
+          <div className="run-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="run-modal-head">
+              <div>
+                <div className="run-modal-title">
+                  {selectedRun.entry.jobTitle || "Untitled role"}
+                  <span className="run-src">
+                    {PLATFORMS[selectedRun.entry.platform]?.label || selectedRun.entry.platform}
+                  </span>
+                </div>
+                <div className="run-modal-sub">
+                  {selectedRun.entry.clientName || "-"} ·{" "}
+                  {new Date(selectedRun.entry.timestamp).toLocaleString()}
+                  {selectedRun.entry.location ? ` · ${selectedRun.entry.location}` : ""} ·{" "}
+                  {selectedRun.entry.candidateCount} found · {selectedRun.entry.revealedCount} revealed
+                </div>
+              </div>
+              <button
+                className="run-modal-close"
+                onClick={() => setSelectedRun(null)}
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <div className="run-modal-body">
+              {selectedRun.loading ? (
+                <div className="loading-block">
+                  <div className="spinner" />
+                  <div className="working-note">Loading this run…</div>
+                </div>
+              ) : selectedRun.candidates.length === 0 ? (
+                <div className="empty">
+                  <div className="big">No candidates saved for this run</div>
+                  <div className="small">
+                    Runs recorded before snapshots were added may not have their candidates stored.
+                  </div>
+                </div>
+              ) : (
+                <div className="table-wrap">
+                  <table className="cand">
+                    <thead>
+                      <tr>
+                        <th>Priority</th>
+                        <th>Name</th>
+                        <th>Title</th>
+                        <th>Company</th>
+                        <th>Location</th>
+                        <th>Match %</th>
+                        <th>Number</th>
+                        <th>Contact?</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedRun.candidates.map((c, i) => {
+                        const phone = pick(c, COL.number);
+                        const pct = Number(pick(c, COL.match) || 0);
+                        const pri = pick(c, COL.priority) || "Low";
+                        const contact = pick(c, COL.contact);
+                        const contactYes = contactReady(contact);
+                        return (
+                          <tr
+                            key={pick(c, COL.candidateId) || `mrow-${i}`}
+                            className="cand-row"
+                            style={{ animationDelay: `${Math.min(i, 24) * 14}ms` }}
+                          >
+                            <td>
+                              <span className={`pill pri-${pri}`}>{pri}</span>
+                            </td>
+                            <td>
+                              <span className="cand-name">{pick(c, COL.name) || <Dash />}</span>
+                            </td>
+                            <td className="cell-soft">{pick(c, COL.title) || <Dash />}</td>
+                            <td className="cell-soft">{pick(c, COL.company) || <Dash />}</td>
+                            <td className="cell-soft">{pick(c, COL.location) || <Dash />}</td>
+                            <td>
+                              <div className="match-bar-wrap">
+                                <span className="match-num mono">{pct}%</span>
+                                <span className="match-bar">
+                                  <span
+                                    className="match-fill"
+                                    style={{ width: `${Math.min(100, pct)}%`, background: matchColor(pct) }}
+                                  />
+                                </span>
+                              </div>
+                            </td>
+                            <td>
+                              {phone ? (
+                                <div className="phone-wrap">
+                                  <span className="phone-cell mono">{phone}</span>
+                                  <button className="copy-btn" onClick={() => copyText(phone, `m${i}`)}>
+                                    {copiedKey === `m${i}` ? "Copied" : "Copy"}
+                                  </button>
+                                </div>
+                              ) : (
+                                <Dash />
+                              )}
+                            </td>
+                            <td>
+                              {contact ? (
+                                <span className={`contact-pill ${contactYes ? "yes" : "no"}`}>{contact}</span>
+                              ) : (
+                                <Dash />
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

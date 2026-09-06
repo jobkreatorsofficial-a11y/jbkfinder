@@ -240,6 +240,7 @@ export async function POST(req: NextRequest) {
       top_score: top ? Number(top["Match %"] ?? top["Match"] ?? 0) : 0,
       page: Number(base.page ?? 1) || 1,
       accounts_used: perAccount.filter((r) => r.ok).map((r) => r.label),
+      candidates: all.slice(0, 300),
     });
   }
 

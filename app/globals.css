@@ -720,3 +720,98 @@ table.cand .match-num { min-width: 30px; }
     animation: none;
   }
 }
+
+/* ---------- Clickable run cards + run detail modal ---------- */
+
+.run-card.clickable {
+  position: relative;
+  cursor: pointer;
+  transition: border-color .15s ease, transform .1s ease, box-shadow .15s ease;
+  padding-right: 34px;
+}
+.run-card.clickable:hover {
+  border-color: var(--brand, #6c63ff);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .18);
+}
+.run-card.clickable:focus-visible {
+  outline: 2px solid var(--brand, #6c63ff);
+  outline-offset: 2px;
+}
+.run-card.clickable::after {
+  content: "›";
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 22px;
+  line-height: 1;
+  color: var(--slate-2);
+  transition: color .15s ease, transform .15s ease;
+}
+.run-card.clickable:hover::after {
+  color: var(--brand, #6c63ff);
+  transform: translateY(-50%) translateX(3px);
+}
+
+.run-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(4, 7, 18, .62);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 30px;
+  animation: overlay-in .18s ease;
+}
+@keyframes overlay-in { from { opacity: 0; } to { opacity: 1; } }
+
+.run-modal {
+  width: min(1040px, 96vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel, #0c1120);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .5);
+  overflow: hidden;
+  animation: modal-in .22s cubic-bezier(.22, .61, .36, 1);
+}
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(12px) scale(.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.run-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.run-modal-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--slate-1);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.run-modal-sub { font-size: 12px; color: var(--slate-2); margin-top: 3px; }
+.run-modal-close {
+  font-size: 22px;
+  line-height: 1;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: rgba(10, 15, 30, .6);
+  color: var(--slate-1);
+  cursor: pointer;
+  flex: none;
+}
+.run-modal-close:hover { border-color: var(--amber); color: var(--amber); }
+.run-modal-body { overflow: auto; padding: 4px 4px 8px; }

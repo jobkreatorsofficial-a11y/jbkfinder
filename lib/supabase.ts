@@ -63,6 +63,9 @@ export interface RunRecord {
   top_score: number;
   page: number;
   accounts_used: string[];
+  // Snapshot of the exact candidates this run returned, so a run can be
+  // reopened later showing precisely what it found.
+  candidates?: CandidateRow[];
 }
 
 export function isSupabaseConfigured(): boolean {
@@ -285,8 +288,57 @@ export async function insertRun(run: RunRecord): Promise<void> {
 }
 
 export async function listRuns(platform?: string): Promise<Record<string, unknown>[]> {
-  const q = new URLSearchParams({ select: "*", order: "created_at.desc", limit: "100" });
+  // Exclude the candidates snapshot from the list to keep the payload light;
+  // it is fetched per-run on demand by getRunCandidates.
+  const q = new URLSearchParams({
+    select: "id,platform,job_title,client_name,location,candidate_count,revealed_count,top_candidate,top_score,page,accounts_used,created_at",
+    order: "created_at.desc",
+    limit: "100",
+  });
   if (platform) q.set("platform", `eq.${platform}`);
   const rows = await req(`runs?${q}`, { method: "GET", headers: headers() });
   return (rows as Record<string, unknown>[]) || [];
+}
+
+interface RunSnapshotRow {
+  candidates: CandidateRow[] | null;
+  platform: string;
+  created_at: string;
+}
+
+interface CandidateAtTimeRow {
+  data: CandidateRow | null;
+  source_account: string | null;
+}
+
+// The exact candidates a run produced. New runs carry a stored snapshot; older
+// runs (recorded before snapshots) fall back to candidates sourced on the same
+// platform within a few minutes of the run.
+export async function getRunCandidates(id: string): Promise<CandidateRow[]> {
+  const q = new URLSearchParams({
+    select: "candidates,platform,created_at",
+    id: `eq.${id}`,
+    limit: "1",
+  });
+  const rows = (await req(`runs?${q}`, { method: "GET", headers: headers() })) as
+    | RunSnapshotRow[]
+    | null;
+  const run = rows && rows[0];
+  if (!run) return [];
+  if (Array.isArray(run.candidates) && run.candidates.length) return run.candidates;
+
+  const t = Date.parse(run.created_at);
+  if (Number.isNaN(t)) return [];
+  const cq = new URLSearchParams({
+    select: "data,source_account",
+    platform: `eq.${run.platform}`,
+    order: "sourced_at.desc",
+    limit: "1000",
+  });
+  cq.append("sourced_at", `gte.${new Date(t - 3 * 60000).toISOString()}`);
+  cq.append("sourced_at", `lte.${new Date(t + 3 * 60000).toISOString()}`);
+  const crows = (await req(`candidates?${cq}`, { method: "GET", headers: headers() })) as
+    | CandidateAtTimeRow[]
+    | null;
+  return (crows || []).map((r) => ({ ...(r.data || {}), _account: r.source_account || "" }));
 }
