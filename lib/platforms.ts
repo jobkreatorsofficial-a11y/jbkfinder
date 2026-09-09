@@ -100,12 +100,13 @@ export const PLATFORMS: Record<PlatformId, Platform> = {
       salaryRange: true,
       ageRange: true,
       strictLocation: true,
-      keywordOverride: false,
+      keywordOverride: true,
       pagination: true,
       excludeIds: true,
       revealCount: true,
     },
     phoneAvailability: "masked",
+    keywordKey: "founditKeyword",
     credentials: [
       {
         name: "founditCookie",
@@ -116,7 +117,7 @@ export const PLATFORMS: Record<PlatformId, Platform> = {
       },
     ],
     notes:
-      "Top candidates get their numbers revealed automatically using credits. Set reveal count to 0 to search for free.",
+      "Search keyword is taken from the Job Title (or set it explicitly below). Top candidates get their numbers revealed automatically using credits — set reveal count to 0 to search for free.",
   },
 
   apna: {
