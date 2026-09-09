@@ -329,7 +329,7 @@ export async function listRuns(platform?: string): Promise<Record<string, unknow
   // Exclude the candidates snapshot from the list to keep the payload light;
   // it is fetched per-run on demand by getRunCandidates.
   const q = new URLSearchParams({
-    select: "id,platform,job_title,client_name,location,candidate_count,revealed_count,top_candidate,top_score,page,accounts_used,created_at",
+    select: "id,platform,job_title,client_name,location,candidate_count,revealed_count,top_candidate,top_score,page,accounts_used,created_at,status,note",
     order: "created_at.desc",
     limit: "100",
   });
