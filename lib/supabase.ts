@@ -122,6 +122,7 @@ export async function upsertAccountCookie(
     cookie,
     csrf,
     status: "unknown",
+    active: true, // pasting a fresh cookie means this login should be used
     cookie_updated_at: new Date().toISOString(),
   };
   await req(`recruiter_accounts?on_conflict=platform,label`, {
