@@ -17,6 +17,7 @@ import {
   type RunEntry,
 } from "@/lib/runHistory";
 import type { AccountSummary } from "@/lib/supabase";
+import type { RoleSuggestion } from "@/lib/roleSuggest";
 import dynamic from "next/dynamic";
 import type { LottieProps } from "lottie-react";
 import livePulse from "@/lib/anim/live-pulse.json";
@@ -330,6 +331,9 @@ export default function Page() {
   const [copiedKey, setCopiedKey] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [resultsPage, setResultsPage] = useState(1);
+  const [titleSuggests, setTitleSuggests] = useState<RoleSuggestion[]>([]);
+  const [titleOpen, setTitleOpen] = useState(false);
+  const suggestTimer = useRef<number | null>(null);
 
   // A run opened from history: shows the exact candidates that run returned.
   const [selectedRun, setSelectedRun] = useState<{
@@ -739,6 +743,37 @@ export default function Page() {
   }
   }
 
+  // Job Title autocomplete: debounced lookup against /api/suggest (curated roles
+  // + real sourced titles). Selecting one fills the field with a portal-friendly
+  // term so the search keyword lands on the right cohort.
+  function onTitleChange(id: PlatformId, value: string) {
+    patchForm(id, { jobTitle: value });
+    if (suggestTimer.current) window.clearTimeout(suggestTimer.current);
+    const q = value.trim();
+    if (q.length < 2) {
+      setTitleSuggests([]);
+      setTitleOpen(false);
+      return;
+    }
+    suggestTimer.current = window.setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/suggest?platform=${id}&q=${encodeURIComponent(q)}`);
+        const d = await r.json();
+        const items = (Array.isArray(d.suggestions) ? d.suggestions : []) as RoleSuggestion[];
+        setTitleSuggests(items);
+        setTitleOpen(items.length > 0);
+      } catch {
+        // suggestions are a convenience; ignore failures
+      }
+    }, 180);
+  }
+
+  function pickTitle(id: PlatformId, label: string) {
+    patchForm(id, { jobTitle: label });
+    setTitleOpen(false);
+    setTitleSuggests([]);
+  }
+
   function copyText(txt: string, key: string) {
     if (!txt) return;
     navigator.clipboard?.writeText(txt).then(() => {
@@ -868,14 +903,39 @@ export default function Page() {
           India-based candidates into your sheet.
         </p>
 
-        <div className="field">
+        <div className="field title-field">
           <label>Job title</label>
           <input
             type="text"
             value={form.jobTitle}
-            onChange={(e) => patchForm(active, { jobTitle: e.target.value })}
-            placeholder="e.g. Academic Counselor"
+            onChange={(e) => onTitleChange(active, e.target.value)}
+            onFocus={() => {
+              if (titleSuggests.length) setTitleOpen(true);
+            }}
+            onBlur={() => window.setTimeout(() => setTitleOpen(false), 150)}
+            placeholder="e.g. Academic Counsellor"
+            autoComplete="off"
           />
+          {titleOpen && titleSuggests.length > 0 && (
+            <div className="suggest-drop">
+              {titleSuggests.map((s) => (
+                <button
+                  type="button"
+                  key={s.label}
+                  className="suggest-item"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    pickTitle(active, s.label);
+                  }}
+                >
+                  <span className="suggest-label">{s.label}</span>
+                  <span className={`suggest-tag ${s.source}`}>
+                    {s.source === "role" ? "suggested" : "sourced"}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="field">

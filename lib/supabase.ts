@@ -110,6 +110,41 @@ export async function activeAccountsWithCookie(platform: string): Promise<Recrui
   return all.filter((a) => a.active && a.cookie && a.cookie.trim());
 }
 
+interface TitleRow {
+  title: string | null;
+}
+
+// Distinct candidate titles already sourced for a platform that match the query,
+// so the Job Title autocomplete reflects real portal vocabulary we've seen.
+export async function suggestTitles(platform: string, query: string, limit = 8): Promise<string[]> {
+  const q = query.trim();
+  if (q.length < 2) return [];
+  const params = new URLSearchParams({
+    select: "title",
+    platform: `eq.${platform}`,
+    title: `ilike.*${q}*`,
+    limit: "120",
+  });
+  const rows = (await req(`candidates?${params}`, { method: "GET", headers: headers() })) as
+    | TitleRow[]
+    | null;
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const r of rows || []) {
+    let t = String(r.title || "").replace(/\s+/g, " ").trim();
+    if (!t) continue;
+    t = t.split(/\s+[-–]\s+/)[0].trim(); // drop "- Company" / "– Company" suffix
+    if (t.length > 60) t = t.slice(0, 60).trim();
+    if (t.length < 2) continue;
+    const key = t.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 export async function upsertAccountCookie(
   platform: string,
   label: string,
