@@ -446,6 +446,8 @@ export default function Page() {
             topCandidate: String(x.top_candidate ?? ""),
             topScore: Number(x.top_score ?? 0),
             page: Number(x.page ?? 1),
+            status: typeof x.status === "string" ? x.status : "ok",
+            note: typeof x.note === "string" ? x.note : "",
           }))
         );
       }
@@ -709,6 +711,7 @@ export default function Page() {
           running: false,
           submitting: false,
         });
+        loadRuns(); // a failed run is now recorded server-side; surface it in history
         return;
       }
 
@@ -1595,11 +1598,13 @@ export default function Page() {
                       <div className="run-role">
                         {r.jobTitle || "Untitled role"}
                         <span className="run-src">{PLATFORMS[r.platform]?.label || r.platform}</span>
+                        {r.status === "failed" && <span className="run-failed">failed</span>}
                       </div>
                       <div className="run-sub">
                         {r.clientName || "-"} · {new Date(r.timestamp).toLocaleString()}
                         {r.location ? ` · ${r.location}` : ""}
                         {r.topCandidate ? ` · top: ${r.topCandidate} (${r.topScore}%)` : ""}
+                        {r.status === "failed" && r.note ? ` · ${r.note}` : ""}
                       </div>
                     </div>
                     <div className="run-nums">

@@ -208,12 +208,25 @@ export async function POST(req: NextRequest) {
   );
 
   if (!perAccount.some((r) => r.ok)) {
+    const reason = `Every ${platform.label} session failed. Cookies may have expired — refresh them.`;
+    if (isSupabaseConfigured()) {
+      await insertRun({
+        platform: platform.id,
+        job_title: String(base.jobTitle ?? ""),
+        client_name: String(base.clientName ?? ""),
+        location: String(base.location ?? ""),
+        candidate_count: 0,
+        revealed_count: 0,
+        top_candidate: "",
+        top_score: 0,
+        page: Number(base.page ?? 1) || 1,
+        accounts_used: perAccount.map((r) => r.label),
+        status: "failed",
+        note: perAccount.map((r) => `${r.label}: ${r.error || "failed"}`).join("; ").slice(0, 300),
+      });
+    }
     return NextResponse.json(
-      {
-        ok: false,
-        error: `Every ${platform.label} session failed. Cookies may have expired — refresh them.`,
-        accounts: perAccount,
-      },
+      { ok: false, error: reason, accounts: perAccount },
       { status: 502 }
     );
   }
@@ -242,6 +255,7 @@ export async function POST(req: NextRequest) {
       page: Number(base.page ?? 1) || 1,
       accounts_used: perAccount.filter((r) => r.ok).map((r) => r.label),
       candidates: all.slice(0, 300),
+      status: "ok",
     });
   }
 

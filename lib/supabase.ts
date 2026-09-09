@@ -66,6 +66,8 @@ export interface RunRecord {
   // Snapshot of the exact candidates this run returned, so a run can be
   // reopened later showing precisely what it found.
   candidates?: CandidateRow[];
+  status?: string;
+  note?: string;
 }
 
 export function isSupabaseConfigured(): boolean {

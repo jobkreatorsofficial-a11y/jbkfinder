@@ -20,6 +20,8 @@ export interface RunEntry {
   topCandidate: string;
   topScore: number;
   page: number;
+  status?: string;
+  note?: string;
 }
 
 export function newRunId(): string {

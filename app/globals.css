@@ -896,3 +896,17 @@ table.cand .match-num { min-width: 30px; }
 }
 .suggest-tag.role { color: #6c63ff; background: rgba(108, 99, 255, .12); }
 .suggest-tag.sourced { color: #2fbd76; background: rgba(46, 189, 118, .12); }
+
+/* Failed run badge in history */
+.run-failed {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  font-weight: 700;
+  color: #e5484d;
+  background: rgba(229, 72, 77, .12);
+  border: 1px solid rgba(229, 72, 77, .35);
+  padding: 2px 7px;
+  border-radius: 999px;
+  margin-left: 6px;
+}
