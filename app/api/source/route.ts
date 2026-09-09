@@ -98,6 +98,10 @@ export async function POST(req: NextRequest) {
   }
   const platform = getPlatform(platformId);
 
+  // Multi-page runs record ONE merged run from the client (via POST /api/runs),
+  // so intermediate page calls suppress per-call recording.
+  const norecord = req.nextUrl.searchParams.get("norecord") === "1";
+
   const webhookUrl = resolveWebhook(platform.webhookEnv, platform.webhookEnvFallbacks);
   if (!webhookUrl) {
     return NextResponse.json(
@@ -209,7 +213,7 @@ export async function POST(req: NextRequest) {
 
   if (!perAccount.some((r) => r.ok)) {
     const reason = `Every ${platform.label} session failed. Cookies may have expired — refresh them.`;
-    if (isSupabaseConfigured()) {
+    if (!norecord && isSupabaseConfigured()) {
       await insertRun({
         platform: platform.id,
         job_title: String(base.jobTitle ?? ""),
@@ -233,7 +237,7 @@ export async function POST(req: NextRequest) {
 
   // Record the run when Supabase is available (best-effort; the dashboard does
   // the final merge/sort, so top-of-run here is approximate).
-  if (isSupabaseConfigured()) {
+  if (!norecord && isSupabaseConfigured()) {
     const revealed = all.filter((c) => {
       const status = String(c["Contact Status"] ?? "").trim().toLowerCase();
       return status === "revealed" || status === "unlocked" || status === "yes";

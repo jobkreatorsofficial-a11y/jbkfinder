@@ -117,7 +117,7 @@ export const PLATFORMS: Record<PlatformId, Platform> = {
       },
     ],
     notes:
-      "Search keyword is taken from the Job Title (or set it explicitly below). Top candidates get their numbers revealed automatically using credits — set reveal count to 0 to search for free.",
+      "Search keyword is taken from the Job Title (or set it explicitly below). Pick how many candidates to fetch (up to 150 — it walks several pages). With \"Reveal every fetched number\" on, all their phone numbers are revealed (1 credit each); turn it off to reveal only the top N or search free.",
   },
 
   apna: {

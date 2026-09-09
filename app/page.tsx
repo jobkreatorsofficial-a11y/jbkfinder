@@ -45,7 +45,8 @@ function pageWindow(cur: number, count: number): (number | "ellipsis")[] {
   return out;
 }
 
-const COUNTS = ["25", "40"];
+const COUNTS = ["25", "40", "80", "100", "120", "150"];
+const FETCH_PAGE = 42; // Foundit/Apna return ~42 per search page; larger counts walk deeper.
 const POLL_INTERVAL_MS = 3000;
 const MAX_TICKS = 45; // roughly 135 seconds
 const REFRESH_MS = 15000;
@@ -124,6 +125,7 @@ interface FormState {
   maxAge: string;
   page: string;
   revealCount: string;
+  revealAll: boolean;
   candidateCount: string;
   clientName: string;
   recipientEmail: string;
@@ -168,7 +170,8 @@ function blankForm(platform: Platform): FormState {
     maxAge: "",
     page: "1",
     revealCount: platform.id === "apna" ? "0" : "20",
-    candidateCount: "25",
+    revealAll: true,
+    candidateCount: "40",
     clientName: "",
     recipientEmail: "",
     sheetUrl: "",
@@ -430,7 +433,7 @@ export default function Page() {
   // Run history is shared across recruiters via Supabase now, not localStorage.
   const loadRuns = useCallback(async () => {
     try {
-      const r = await fetch("/api/runs");
+      const r = await fetch("/api/runs", { cache: "no-store" });
       const d = await r.json();
       if (d.ok && Array.isArray(d.runs)) {
         setRuns(
@@ -617,7 +620,7 @@ export default function Page() {
     [loadResults, patchRun]
   );
 
-  function buildPayload(id: PlatformId): Record<string, string> {
+  function buildPayload(id: PlatformId, opts: { page?: number; reveal?: number } = {}): Record<string, string> {
     const p = PLATFORMS[id];
     const f = forms[id];
     const payload: Record<string, string> = {
@@ -645,17 +648,19 @@ export default function Page() {
       payload.maxAge = f.maxAge;
     }
     if (p.supports.pagination) {
-      payload.page = String(pageOf(f));
+      payload.page = String(opts.page ?? pageOf(f));
     }
     if (p.supports.revealCount) {
-      // Blank omits the key so the workflow applies its own default of 20. An
-      // explicit 0 is sent through and means reveal nothing.
-      const reveal = f.revealCount.trim();
-      if (reveal && Number.isFinite(Number(reveal))) {
-        payload.revealCount = String(Number(reveal));
+      // opts.reveal overrides for the multi-page reveal-all walk; otherwise the
+      // form value (blank omits the key so the workflow uses its own default).
+      if (opts.reveal != null) {
+        payload.revealCount = String(Math.max(0, opts.reveal));
+      } else {
+        const reveal = f.revealCount.trim();
+        if (reveal && Number.isFinite(Number(reveal))) payload.revealCount = String(Number(reveal));
       }
     }
-    if (p.supports.excludeIds) {
+    if (p.supports.excludeIds && opts.page == null) {
       // Every Candidate ID already on screen for this platform, so a repeat run
       // walks past them instead of returning the same people.
       payload.excludeIds = Array.from(seenIds.current[id]).join(",");
@@ -685,9 +690,10 @@ export default function Page() {
     return;
   }
 
-  const payload = buildPayload(id);
-
-    const pageUsed = pageOf(f);
+    const startPage = pageOf(f);
+    const wantCount = Math.max(1, Number(f.candidateCount) || 40);
+    const pages = p.supports.pagination ? Math.max(1, Math.ceil(wantCount / FETCH_PAGE)) : 1;
+    const revealAll = p.supports.revealCount ? f.revealAll : false;
     const startedAt = Date.now();
     patchRun(id, {
       running: true,
@@ -699,51 +705,139 @@ export default function Page() {
     });
 
     try {
-      const r = await fetch("/api/source", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const d = await r.json();
-      if (!d.ok) {
+      const merged: Candidate[] = [];
+      const seen = new Set<string>();
+      const accountsUsed = new Set<string>();
+      let anyOk = false;
+      let lastErr = "";
+      // Foundit/Apna cap a search at ~42 rows, so a 150-count run walks several
+      // pages and merges them. Each page reveals its own numbers (reveal-all),
+      // and the whole run is recorded once at the end.
+      for (let i = 0; i < pages; i++) {
+        const pg = startPage + i;
+        const reveal = p.supports.revealCount
+          ? revealAll
+            ? FETCH_PAGE
+            : i === 0
+              ? Number(f.revealCount) || 0
+              : 0
+          : undefined;
+        const payload = buildPayload(id, { page: pg, reveal });
+        const r = await fetch("/api/source?norecord=1", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const d = await r.json();
+        if (!d.ok) {
+          lastErr = d.error || "Could not start sourcing.";
+          continue;
+        }
+        anyOk = true;
+        for (const a of Array.isArray(d.accounts) ? d.accounts : []) {
+          if (a && a.ok) accountsUsed.add(String(a.label));
+        }
+        const rows = (Array.isArray(d.candidates) ? d.candidates : []) as Candidate[];
+        let added = 0;
+        for (const c of rows) {
+          const key =
+            String(c["Candidate ID"] || c["CandidateID"] || c["Id"] || "") ||
+            `${c.Name || ""}|${c.Number || ""}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          merged.push(c);
+          added++;
+          if (merged.length >= wantCount) break;
+        }
+        setView("results");
+        setResults((prev) => ({ ...prev, [id]: merged.slice() }));
+        rememberIds(id, rows);
+        if (merged.length >= wantCount || rows.length === 0 || added === 0) break;
+      }
+
+      if (p.supports.pagination) patchForm(id, { page: String(startPage + pages) });
+
+      if (!anyOk) {
         patchRun(id, {
-          formErr: d.error || "Could not start sourcing.",
+          formErr: lastErr || "Could not start sourcing.",
           running: false,
           submitting: false,
         });
-        loadRuns(); // a failed run is now recorded server-side; surface it in history
+        void fetch("/api/runs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            platform: id,
+            jobTitle: f.jobTitle,
+            clientName: f.clientName,
+            location: f.location,
+            page: startPage,
+            accountsUsed: [],
+            candidates: [],
+            status: "failed",
+            note: lastErr,
+          }),
+        }).then(() => loadRuns());
         return;
       }
 
-      setView("results");
+      patchRun(id, {
+        running: false,
+        submitting: false,
+        justAccepted: true,
+        loadingResults: false,
+        timedOut: false,
+      });
+      if (!merged.length) {
+        patchRun(id, { formErr: "No candidates — try a fresh cookie or a broader keyword." });
+      }
 
-      // Walk to the next block on the following run, so repeat runs against the
-      // same JD keep pulling fresh people.
-      if (p.supports.pagination) patchForm(id, { page: String(pageUsed + 1) });
-
-    // The fan-out returns the scored candidates inline; show them straight away.
-    const direct = (Array.isArray(d.candidates) ? d.candidates : []) as Candidate[];
-    setResults((prev) => ({ ...prev, [id]: direct }));
-    rememberIds(id, direct);
-    patchRun(id, {
-      running: false,
-      submitting: false,
-      justAccepted: true,
-      loadingResults: false,
-      timedOut: false,
-    });
-    if (!direct.length && Array.isArray(d.accounts)) {
-      const failed = d.accounts.filter((a: { ok: boolean }) => !a.ok).length;
-      if (failed) patchRun(id, { formErr: `No candidates — ${failed} login(s) failed. Refresh their cookies.` });
+      // Record ONE merged run and prepend it so it shows in history instantly.
+      const revealedNow = merged.filter(
+        (c) => String(c["Contact Status"] || "").trim().toLowerCase() === "revealed"
+      ).length;
+      const topC = merged.reduce<Candidate | null>((best, c) => {
+        const m = Number(c["Match %"] ?? c["Match"] ?? 0);
+        const bm = best ? Number(best["Match %"] ?? best["Match"] ?? 0) : -1;
+        return m > bm ? c : best;
+      }, null);
+      const optimistic: RunEntry = {
+        id: newRunId(),
+        platform: id,
+        timestamp: new Date().toISOString(),
+        jobTitle: f.jobTitle,
+        clientName: f.clientName,
+        location: f.location,
+        candidateCount: merged.length,
+        revealedCount: revealedNow,
+        topCandidate: topC ? String(topC.Name || "") : "",
+        topScore: topC ? Number(topC["Match %"] ?? topC["Match"] ?? 0) : 0,
+        page: startPage,
+        status: "ok",
+        note: "",
+      };
+      setRuns((prev) => [optimistic, ...prev].slice(0, 100));
+      await fetch("/api/runs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          platform: id,
+          jobTitle: f.jobTitle,
+          clientName: f.clientName,
+          location: f.location,
+          page: startPage,
+          accountsUsed: Array.from(accountsUsed),
+          candidates: merged,
+        }),
+      });
+      loadRuns();
+    } catch {
+      patchRun(id, {
+        formErr: "Could not reach the sourcing service.",
+        running: false,
+        submitting: false,
+      });
     }
-    loadRuns();
-  } catch {
-    patchRun(id, {
-      formErr: "Could not reach the sourcing service.",
-      running: false,
-      submitting: false,
-    });
-  }
   }
 
   // Job Title autocomplete: debounced lookup against /api/suggest (curated roles
@@ -1155,18 +1249,33 @@ export default function Page() {
             )}
             {platform.supports.revealCount && (
               <div className="field">
-                <label>Reveal count</label>
-                <input
-                  type="number"
-                  min="0"
-                  placeholder="20"
-                  value={form.revealCount}
-                  onChange={(e) => patchForm(active, { revealCount: e.target.value })}
-                />
-                <div className="field-note">
-                  Credits spent per run. Set to 0 to search without revealing numbers. Leave
-                  blank for the workflow default of 20.
-                </div>
+                <label>Phone numbers</label>
+                <label className="reveal-all">
+                  <input
+                    type="checkbox"
+                    checked={form.revealAll}
+                    onChange={(e) => patchForm(active, { revealAll: e.target.checked })}
+                  />
+                  Reveal every fetched number
+                </label>
+                {form.revealAll ? (
+                  <div className="field-note">
+                    All {form.candidateCount} numbers get revealed — 1 credit each.
+                  </div>
+                ) : (
+                  <>
+                    <input
+                      type="number"
+                      min="0"
+                      placeholder="20"
+                      value={form.revealCount}
+                      onChange={(e) => patchForm(active, { revealCount: e.target.value })}
+                    />
+                    <div className="field-note">
+                      Reveal only the top N by match. Set 0 to search free.
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>

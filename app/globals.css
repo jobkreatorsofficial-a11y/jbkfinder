@@ -910,3 +910,23 @@ table.cand .match-num { min-width: 30px; }
   border-radius: 999px;
   margin-left: 6px;
 }
+
+/* Reveal-all checkbox in the source panel */
+.reveal-all {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--slate-1);
+  cursor: pointer;
+  margin: 2px 0 4px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+}
+.reveal-all input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--brand);
+  cursor: pointer;
+}
