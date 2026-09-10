@@ -297,6 +297,17 @@ export async function getCandidates(
   if (sinceIso) q.set("sourced_at", `gte.${sinceIso}`);
 
   const PAGE = 1000;
+  // Only the fields the dashboard table renders — dropping bulky blobs (skills,
+  // resume summary, etc.) keeps the payload small enough to load thousands of rows.
+  const KEEP = new Set([
+    "Candidate ID", "CandidateID", "Id", "Name", "Full Name", "Title", "Designation",
+    "Current Title", "Company", "Current Company", "Employer", "Location", "City",
+    "Current Location", "Experience (yrs)", "Experience", "Total Experience",
+    "Experience Years", "Current Salary (LPA)", "Salary (LPA)", "Salary", "CTC", "Age",
+    "Match %", "Match", "Score", "Number", "Phone", "Mobile", "Contact Status",
+    "Contact?", "Contactable", "Contact", "Profile Link", "Profile URL", "Profile",
+    "Link", "Role", "Client", "Sourced At", "SourcedAt", "Date", "Local", "Rank", "Reveal",
+  ]);
   const out: CandidateRow[] = [];
   for (let from = 0; from <= 20000; from += PAGE) {
     const to = from + PAGE - 1;
@@ -309,7 +320,12 @@ export async function getCandidates(
     }
     const text = await res.text();
     const rows = (text.trim() ? JSON.parse(text) : []) as CandidateReadRow[];
-    for (const r of rows) out.push({ ...(r.data || {}), _account: r.source_account || "" });
+    for (const r of rows) {
+      const d = r.data || {};
+      const slim: CandidateRow = { _account: r.source_account || "" };
+      for (const k in d) if (KEEP.has(k)) slim[k] = d[k];
+      out.push(slim);
+    }
     if (rows.length < PAGE) break;
   }
   return out;
