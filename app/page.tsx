@@ -900,7 +900,12 @@ export default function Page() {
       const fresh = list.filter((c) => tsOf(c) >= cutoff);
       if (fresh.length) list = fresh;
     }
+    const hasNum = (c: Candidate) => (/^\+/.test(String(pick(c, COL.number) || "")) ? 1 : 0);
     return list.sort((a, b) => {
+      // Profiles whose number is actually revealed float to the top, so the
+      // fetched-with-contact candidates are what you see first (not masked noise).
+      const nd = hasNum(b) - hasNum(a);
+      if (nd !== 0) return nd;
       const d = tsOf(b) - tsOf(a);
       if (d !== 0) return d;
       return Number(pick(b, COL.match) || 0) - Number(pick(a, COL.match) || 0);
