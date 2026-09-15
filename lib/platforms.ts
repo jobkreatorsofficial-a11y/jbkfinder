@@ -61,7 +61,7 @@ export const PLATFORMS: Record<PlatformId, Platform> = {
       ageRange: true,
       strictLocation: true,
       keywordOverride: true,
-      pagination: false,
+      pagination: true,
       excludeIds: false,
       revealCount: false,
     },
